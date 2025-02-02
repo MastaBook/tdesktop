@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QFileDialog>
 #include <QtGui/QDesktopServices>
 #include <QtCore/QSettings>
+#include <QtCore/QStandardPaths>
 
 #include <Shlwapi.h>
 #include <Windowsx.h>
@@ -142,7 +143,7 @@ void UnsafeOpenEmailLink(const QString &email) {
 	}
 }
 
-bool UnsafeShowOpenWithDropdown(const QString &filepath, QPoint menuPosition) {
+bool UnsafeShowOpenWithDropdown(const QString &filepath) {
 	if (!Dlls::SHAssocEnumHandlers || !Dlls::SHCreateItemFromParsingName) {
 		return false;
 	}
@@ -230,7 +231,9 @@ bool UnsafeShowOpenWithDropdown(const QString &filepath, QPoint menuPosition) {
 			menuInfo.dwTypeData = nameArr;
 			InsertMenuItem(menu, GetMenuItemCount(menu), TRUE, &menuInfo);
 
-			int sel = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RETURNCMD, menuPosition.x(), menuPosition.y(), 0, parentHWND, 0);
+			POINT position;
+			GetCursorPos(&position);
+			int sel = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RETURNCMD, position.x, position.y, 0, parentHWND, 0);
 			DestroyMenu(menu);
 
 			if (sel > 0) {
@@ -372,7 +375,9 @@ bool Get(
 		dialog.setFileMode(QFileDialog::AnyFile);
 		dialog.setAcceptMode(QFileDialog::AcceptSave);
 	}
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	dialog.show();
+#endif // Qt < 6.0.0
 
 	auto realLastPath = [=] {
 		// If we're given some non empty path containing a folder - use it.

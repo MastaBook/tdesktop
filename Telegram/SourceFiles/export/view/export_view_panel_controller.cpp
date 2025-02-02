@@ -14,7 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/separate_panel.h"
 #include "ui/wrap/padding_wrap.h"
 #include "mtproto/mtproto_config.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "lang/lang_keys.h"
 #include "storage/storage_account.h"
 #include "core/application.h"
@@ -23,6 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "base/platform/base_platform_info.h"
 #include "base/unixtime.h"
+#include "base/qt/qt_common_adapters.h"
+#include "boxes/abstract_box.h" // Ui::show().
 #include "styles/style_export.h"
 #include "styles/style_layers.h"
 
@@ -154,7 +156,7 @@ PanelController::~PanelController() {
 		saveSettings();
 	}
 	if (_panel) {
-		_panel->destroyLayer();
+		_panel->hideLayer(anim::type::instant);
 	}
 }
 
@@ -166,7 +168,9 @@ void PanelController::activatePanel() {
 
 void PanelController::createPanel() {
 	const auto singlePeer = _settings->onlySinglePeer();
-	_panel = base::make_unique_q<Ui::SeparatePanel>();
+	_panel = base::make_unique_q<Ui::SeparatePanel>(Ui::SeparatePanelArgs{
+		.onAllSpaces = true,
+	});
 	_panel->setTitle((singlePeer
 		? tr::lng_export_header_chats
 		: tr::lng_export_title)());
@@ -216,11 +220,12 @@ void PanelController::showSettings() {
 void PanelController::showError(const ApiErrorState &error) {
 	LOG(("Export Info: API Error '%1'.").arg(error.data.type()));
 
-	if (error.data.type() == qstr("TAKEOUT_INVALID")) {
+	if (error.data.type() == u"TAKEOUT_INVALID"_q) {
 		showError(tr::lng_export_invalid(tr::now));
-	} else if (error.data.type().startsWith(qstr("TAKEOUT_INIT_DELAY_"))) {
-		const auto seconds = std::max(error.data.type().midRef(
-			qstr("TAKEOUT_INIT_DELAY_").size()).toInt(), 1);
+	} else if (error.data.type().startsWith(u"TAKEOUT_INIT_DELAY_"_q)) {
+		const auto seconds = std::max(base::StringViewMid(
+			error.data.type(),
+			u"TAKEOUT_INIT_DELAY_"_q.size()).toInt(), 1);
 		const auto now = QDateTime::currentDateTime();
 		const auto when = now.addSecs(seconds);
 		const auto hours = seconds / 3600;
@@ -228,7 +233,7 @@ void PanelController::showError(const ApiErrorState &error) {
 			if (hours <= 0) {
 				return tr::lng_export_delay_less_than_hour(tr::now);
 			}
-			return tr::lng_export_delay_hours(tr::now, lt_count, hours);
+			return tr::lng_hours(tr::now, lt_count, hours);
 		}();
 		showError(tr::lng_export_delay(
 			tr::now,
@@ -271,7 +276,7 @@ void PanelController::showCriticalError(const QString &text) {
 }
 
 void PanelController::showError(const QString &text) {
-	auto box = Box<InformBox>(text);
+	auto box = Ui::MakeInformBox(text);
 	const auto weak = Ui::MakeWeak(box.data());
 	const auto hidden = _panel->isHidden();
 	_panel->showBox(
@@ -327,7 +332,7 @@ void PanelController::showProgress() {
 	_panel->setHideOnDeactivate(true);
 }
 
-void PanelController::stopWithConfirmation(FnMut<void()> callback) {
+void PanelController::stopWithConfirmation(Fn<void()> callback) {
 	if (!v::is<ProcessingState>(_state)) {
 		LOG(("Export Info: Stop Panel Without Confirmation."));
 		stopExport();
@@ -347,11 +352,12 @@ void PanelController::stopWithConfirmation(FnMut<void()> callback) {
 	};
 	const auto hidden = _panel->isHidden();
 	const auto old = _confirmStopBox;
-	auto box = Box<ConfirmBox>(
-		tr::lng_export_sure_stop(tr::now),
-		tr::lng_export_stop(tr::now),
-		st::attentionBoxButton,
-		std::move(stop));
+	auto box = Ui::MakeConfirmBox({
+		.text = tr::lng_export_sure_stop(),
+		.confirmed = std::move(stop),
+		.confirmText = tr::lng_export_stop(),
+		.confirmStyle = &st::attentionBoxButton,
+	});
 	_confirmStopBox = box.data();
 	_panel->showBox(
 		std::move(box),

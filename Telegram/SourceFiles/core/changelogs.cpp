@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "storage/storage_domain.h"
 #include "data/data_session.h"
+#include "base/qt/qt_common_adapters.h"
 #include "mainwindow.h"
 #include "apiwrap.h"
 
@@ -22,31 +23,22 @@ namespace {
 std::map<int, const char*> BetaLogs() {
 	return {
 	{
-		2009004,
-		"- Choose one from dozens of new gorgeous animated backgrounds"
-		" in Chat Settings > Chat background.\n"
+		4008011,
+		"- Fix initial video playback speed.\n"
+
+		"- Use native window resize on Windows 11.\n"
+
+		"- Fix memory leak in Direct3D 11 media viewer on Windows.\n"
 	},
 	{
-		2009005,
-		"- Tile chat background patterns horizontally.\n"
+		4010004,
+		"- Statistics in channels and group chats.\n"
 
-		"- Fix a rare crash in spellchecker on Windows.\n"
+		"- Nice looking code blocks with syntax highlight.\n"
 
-		"- Fix animated chat backgrounds in Saved Messages.\n"
-
-		"- Fix \"Sorry, group is inaccessible\" message "
-		"in scheduled voice chats.\n",
-	},
-	{
-		2009013,
-		"- See unread comments count when scrolling discussions in channels."
-	},
-	{
-		3000002,
-		"- Check who've seen your message in small groups "
-		"from the context menu.\n"
-
-		"- Enable recording with video in live streams and video chats."
+		"- Copy full code block by click on its header.\n"
+		
+		"- Send a highlighted code block using ```language syntax.\n"
 	}
 	};
 };
@@ -145,13 +137,13 @@ void Changelogs::addBetaLog(int changeVersion, const char *changes) {
 		static const auto simple = u"\n- "_q;
 		static const auto separator = QString::fromUtf8("\n\xE2\x80\xA2 ");
 		auto result = QString::fromUtf8(changes).trimmed();
-		if (result.startsWith(simple.midRef(1))) {
+		if (result.startsWith(base::StringViewMid(simple, 1))) {
 			result = separator.mid(1) + result.mid(simple.size() - 1);
 		}
 		return result.replace(simple, separator);
 	}();
 	const auto version = FormatVersionDisplay(changeVersion);
-	const auto log = qsl("New in version %1 beta:\n\n").arg(version) + text;
+	const auto log = u"New in version %1 beta:\n\n"_q.arg(version) + text;
 	addLocalLog(log);
 }
 

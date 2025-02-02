@@ -21,6 +21,10 @@ namespace Main {
 class Session;
 } // namespace Main
 
+namespace ChatHelpers {
+struct EmojiInteractionsBunch;
+} // namespace ChatHelpers
+
 namespace Api {
 
 class Updates final {
@@ -35,6 +39,8 @@ public:
 		uint64 sentMessageRandomId = 0);
 	void applyUpdatesNoPtsCheck(const MTPUpdates &updates);
 	void applyUpdateNoPtsCheck(const MTPUpdate &update);
+
+	void checkForSentToScheduled(const MTPUpdates &updates);
 
 	[[nodiscard]] int32 pts() const;
 
@@ -59,6 +65,7 @@ public:
 	void requestChannelRangeDifference(not_null<History*> history);
 
 	void addActiveChat(rpl::producer<PeerData*> chat);
+	[[nodiscard]] bool inActiveChats(not_null<PeerData*> peer) const;
 
 private:
 	enum class ChannelDifferenceRequest {
@@ -126,6 +133,9 @@ private:
 	// Doesn't call sendHistoryChangeNotifications itself.
 	void feedUpdate(const MTPUpdate &update);
 
+	void applyConvertToScheduledOnSend(
+		const MTPVector<MTPUpdate> &other,
+		bool skipScheduledCheck = false);
 	void applyGroupCallParticipantUpdates(const MTPUpdates &updates);
 
 	bool whenGetDiffChanged(
@@ -139,6 +149,21 @@ private:
 		MsgId rootId,
 		PeerId fromId,
 		const MTPSendMessageAction &action);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		const MTPDsendMessageEmojiInteraction &data);
+	void handleSpeakingInCall(
+		not_null<PeerData*> peer,
+		PeerId participantPeerId,
+		PeerData *participantPeerLoaded);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		const QString &emoticon,
+		ChatHelpers::EmojiInteractionsBunch bunch);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		const QString &emoticon);
 
 	const not_null<Main::Session*> _session;
 
@@ -191,5 +216,8 @@ private:
 	rpl::lifetime _lifetime;
 
 };
+
+[[nodiscard]] bool IsWithdrawalNotification(
+	const MTPDupdateServiceNotification &);
 
 } // namespace Api

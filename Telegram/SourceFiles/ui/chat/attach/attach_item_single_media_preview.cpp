@@ -32,10 +32,11 @@ using namespace ::Media::Streaming;
 
 ItemSingleMediaPreview::ItemSingleMediaPreview(
 	QWidget *parent,
+	const style::ComposeControls &st,
 	Fn<bool()> gifPaused,
 	not_null<HistoryItem*> item,
 	AttachControls::Type type)
-: AbstractSingleMediaPreview(parent, type)
+: AbstractSingleMediaPreview(parent, st, type, [] { return true; })
 , _gifPaused(std::move(gifPaused))
 , _fullId(item->fullId()) {
 	const auto media = item->media();
@@ -82,9 +83,7 @@ ItemSingleMediaPreview::ItemSingleMediaPreview(
 		}
 	};
 
-	rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	rpl::single(rpl::empty) | rpl::then(
 		session->downloaderTaskFinished()
 	) | rpl::start_with_next([=] {
 		const auto computed = computeThumbInfo();
@@ -151,14 +150,15 @@ void ItemSingleMediaPreview::setupStreamedPreview(
 void ItemSingleMediaPreview::handleStreamingUpdate(Update &&update) {
 	v::match(update.data, [&](Information &update) {
 		streamingReady(std::move(update));
-	}, [&](const PreloadedVideo &update) {
-	}, [&](const UpdateVideo &update) {
+	}, [](PreloadedVideo) {
+	}, [&](UpdateVideo) {
 		this->update();
-	}, [&](const PreloadedAudio &update) {
-	}, [&](const UpdateAudio &update) {
-	}, [&](const WaitingForData &update) {
-	}, [&](MutedByOther) {
-	}, [&](Finished) {
+	}, [](PreloadedAudio) {
+	}, [](UpdateAudio) {
+	}, [](WaitingForData) {
+	}, [](SpeedEstimate) {
+	}, [](MutedByOther) {
+	}, [](Finished) {
 	});
 }
 
@@ -192,11 +192,15 @@ void ItemSingleMediaPreview::startStreamedPlayer() {
 	_streamed->play(options);
 }
 
+bool ItemSingleMediaPreview::supportsSpoilers() const {
+	return false; // We are not allowed to change existing spoiler setting.
+}
+
 bool ItemSingleMediaPreview::drawBackground() const {
 	return true; // A sticker can't be here.
 }
 
-bool ItemSingleMediaPreview::tryPaintAnimation(Painter &p) {
+bool ItemSingleMediaPreview::tryPaintAnimation(QPainter &p) {
 	checkStreamedIsStarted();
 	if (_streamed
 		&& _streamed->player().ready()
@@ -205,8 +209,8 @@ bool ItemSingleMediaPreview::tryPaintAnimation(Painter &p) {
 		const auto paused = _gifPaused();
 
 		auto request = ::Media::Streaming::FrameRequest();
-		request.outer = s * cIntRetinaFactor();
-		request.resize = s * cIntRetinaFactor();
+		request.outer = s * style::DevicePixelRatio();
+		request.resize = s * style::DevicePixelRatio();
 		p.drawImage(
 			QRect(
 				previewLeft(),

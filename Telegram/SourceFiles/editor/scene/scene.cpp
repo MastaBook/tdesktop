@@ -46,7 +46,7 @@ void Scene::cancelDrawing() {
 	_canvas->cancelDrawing();
 }
 
-void Scene::addItem(std::shared_ptr<NumberedItem> item) {
+void Scene::addItem(ItemPtr item) {
 	if (!item) {
 		return;
 	}
@@ -118,18 +118,6 @@ std::vector<ItemPtr> Scene::items(
 	});
 
 	return copyItems;
-}
-
-std::vector<MTPInputDocument> Scene::attachedStickers() const {
-	const auto allItems = items();
-
-	return ranges::views::all(
-		allItems
-	) | ranges::views::filter([](const ItemPtr &i) {
-		return i->isVisible() && (i->type() == ItemSticker::Type);
-	}) | ranges::views::transform([](const ItemPtr &i) {
-		return static_cast<ItemSticker*>(i.get())->sticker();
-	}) | ranges::to_vector;
 }
 
 std::shared_ptr<float64> Scene::lastZ() const {

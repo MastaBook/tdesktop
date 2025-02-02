@@ -25,12 +25,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "data/data_user.h"
 #include "countries/countries_instance.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/wrap/fade_wrap.h"
+#include "ui/ui_utility.h"
+#include "boxes/abstract_box.h"
 #include "core/update_checker.h"
 #include "core/application.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -41,9 +43,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/section_widget.h"
 #include "base/platform/base_platform_info.h"
 #include "api/api_text_entities.h"
-#include "app.h"
 #include "styles/style_layers.h"
 #include "styles/style_intro.h"
+#include "base/qt/qt_common_adapters.h"
 
 namespace Intro {
 namespace {
@@ -74,6 +76,7 @@ Widget::Widget(
 : RpWidget(parent)
 , _account(account)
 , _data(details::Data{ .controller = controller })
+, _nextStyle(&st::introNextButton)
 , _back(this, object_ptr<Ui::IconButton>(this, st::introBackButton))
 , _settings(
 	this,
@@ -83,12 +86,12 @@ Widget::Widget(
 		st::defaultBoxButton))
 , _next(
 	this,
-	object_ptr<Ui::RoundButton>(this, nullptr, st::introNextButton))
+	object_ptr<Ui::RoundButton>(this, nullptr, *_nextStyle))
 , _connecting(std::make_unique<Window::ConnectionState>(
 		this,
 		account,
 		rpl::single(true))) {
-	Core::App().setDefaultFloatPlayerDelegate(floatPlayerDelegate());
+	controller->setDefaultFloatPlayerDelegate(floatPlayerDelegate());
 
 	getData()->country = ComputeNewAccountCountry();
 
@@ -127,8 +130,6 @@ Widget::Widget(
 	_back->entity()->setClickedCallback([=] { backRequested(); });
 	_back->hide(anim::type::instant);
 
-	_next->entity()->setClickedCallback([=] { getStep()->submit(); });
-
 	if (_changeLanguage) {
 		_changeLanguage->finishAnimating();
 	}
@@ -149,7 +150,7 @@ Widget::Widget(
 		Core::UpdateChecker checker;
 		checker.start();
 		rpl::merge(
-			rpl::single(rpl::empty_value()),
+			rpl::single(rpl::empty),
 			checker.isLatest(),
 			checker.failed(),
 			checker.ready()
@@ -176,6 +177,9 @@ not_null<Ui::RpWidget*> Widget::floatPlayerWidget() {
 	return this;
 }
 
+void Widget::floatPlayerToggleGifsPaused(bool paused) {
+}
+
 auto Widget::floatPlayerGetSection(Window::Column column)
 -> not_null<Media::Player::FloatSectionDelegate*> {
 	return this;
@@ -194,8 +198,9 @@ bool Widget::floatPlayerIsVisible(not_null<HistoryItem*> item) {
 void Widget::floatPlayerDoubleClickEvent(not_null<const HistoryItem*> item) {
 	getData()->controller->invokeForSessionController(
 		&item->history()->peer->session().account(),
-		[=](not_null<Window::SessionController*> controller) {
-			controller->showPeerHistoryAtItem(item);
+		item->history()->peer,
+		[&](not_null<Window::SessionController*> controller) {
+			controller->showMessage(item);
 		});
 }
 
@@ -237,7 +242,7 @@ void Widget::handleUpdate(const MTPUpdate &update) {
 			qs(data.vmessage()),
 			Api::EntitiesFromMTP(nullptr, data.ventities().v)
 		};
-		Ui::show(Box<InformBox>(text));
+		Ui::show(Ui::MakeInformBox(text));
 	}, [](const auto &) {});
 }
 
@@ -296,14 +301,14 @@ void Widget::checkUpdateStatus() {
 				this,
 				tr::lng_menu_update(),
 				st::defaultBoxButton));
-		if (!_a_show.animating()) {
+		if (!_showAnimation) {
 			_update->setVisible(true);
 		}
 		const auto stepHasCover = getStep()->hasCover();
 		_update->toggle(!stepHasCover, anim::type::instant);
 		_update->entity()->setClickedCallback([] {
 			Core::checkReadyUpdate();
-			App::restart();
+			Core::Restart();
 		});
 	} else {
 		if (!_update) return;
@@ -341,13 +346,35 @@ void Widget::historyMove(StackAction action, Animate animate) {
 	if (_terms) {
 		hideAndDestroy(std::exchange(_terms, { nullptr }));
 	}
+	{
+		getStep()->nextButtonStyle(
+		) | rpl::start_with_next([=](const style::RoundButton *st) {
+			const auto nextStyle = st ? st : &st::introNextButton;
+			if (_nextStyle != nextStyle) {
+				_nextStyle = nextStyle;
+				const auto wasShown = _next->toggled();
+				_next.destroy();
+				_next.create(
+					this,
+					object_ptr<Ui::RoundButton>(this, nullptr, *nextStyle));
+				showControls();
+				updateControlsGeometry();
+				_next->toggle(wasShown, anim::type::instant);
+			}
+		}, _next->lifetime());
+	}
 
 	getStep()->finishInit();
 	getStep()->prepareShowAnimated(wasStep);
 	if (wasStep->hasCover() != getStep()->hasCover()) {
 		_nextTopFrom = wasStep->contentTop() + st::introNextTop;
 		_controlsTopFrom = wasStep->hasCover() ? st::introCoverHeight : 0;
-		_coverShownAnimation.start([this] { updateControlsGeometry(); }, 0., 1., st::introCoverDuration, wasStep->hasCover() ? anim::linear : anim::easeOutCirc);
+		_coverShownAnimation.start(
+			[this] { updateControlsGeometry(); },
+			0.,
+			1.,
+			st::introCoverDuration,
+			wasStep->hasCover() ? anim::linear : anim::easeOutCirc);
 	}
 
 	_stepLifetime.destroy();
@@ -459,13 +486,8 @@ void Widget::showTerms() {
 				Ui::Text::WithEntities),
 			st::introTermsLabel);
 		_terms.create(this, std::move(entity));
-		_terms->entity()->setClickHandlerFilter([=](
-				const ClickHandlerPtr &handler,
-				Qt::MouseButton button) {
-			if (button == Qt::LeftButton) {
-				showTerms(nullptr);
-			}
-			return false;
+		_terms->entity()->overrideLinkClickHandler([=] {
+			showTerms(nullptr);
 		});
 		updateControlsGeometry();
 		_terms->hide(anim::type::instant);
@@ -486,16 +508,18 @@ void Widget::resetAccount() {
 		return;
 	}
 
-	Ui::show(Box<ConfirmBox>(tr::lng_signin_sure_reset(tr::now), tr::lng_signin_reset(tr::now), st::attentionBoxButton, crl::guard(this, [this] {
+	const auto callback = crl::guard(this, [this] {
 		if (_resetRequest) {
 			return;
 		}
 		_resetRequest = _api->request(MTPaccount_DeleteAccount(
-			MTP_string("Forgot password")
-		)).done([=](const MTPBool &result) {
+			MTP_flags(0),
+			MTP_string("Forgot password"),
+			MTPInputCheckPasswordSRP()
+		)).done([=] {
 			_resetRequest = 0;
 
-			Ui::hideLayer();
+			getData()->controller->hideLayer();
 			if (getData()->phone.isEmpty()) {
 				moveToStep(
 					new QrWidget(this, _account, getData()),
@@ -511,21 +535,20 @@ void Widget::resetAccount() {
 			_resetRequest = 0;
 
 			const auto &type = error.type();
-			if (type.startsWith(qstr("2FA_CONFIRM_WAIT_"))) {
-				const auto seconds = type.midRef(qstr("2FA_CONFIRM_WAIT_").size()).toInt();
+			if (type.startsWith(u"2FA_CONFIRM_WAIT_"_q)) {
+				const auto seconds = base::StringViewMid(
+					type,
+					u"2FA_CONFIRM_WAIT_"_q.size()).toInt();
 				const auto days = (seconds + 59) / 86400;
 				const auto hours = ((seconds + 59) % 86400) / 3600;
 				const auto minutes = ((seconds + 59) % 3600) / 60;
-				auto when = tr::lng_signin_reset_minutes(
-					tr::now,
-					lt_count,
-					minutes);
+				auto when = tr::lng_minutes(tr::now, lt_count, minutes);
 				if (days > 0) {
-					const auto daysCount = tr::lng_signin_reset_days(
+					const auto daysCount = tr::lng_days(
 						tr::now,
 						lt_count,
 						days);
-					const auto hoursCount = tr::lng_signin_reset_hours(
+					const auto hoursCount = tr::lng_hours(
 						tr::now,
 						lt_count,
 						hours);
@@ -538,7 +561,7 @@ void Widget::resetAccount() {
 						lt_minutes_count,
 						when);
 				} else if (hours > 0) {
-					const auto hoursCount = tr::lng_signin_reset_hours(
+					const auto hoursCount = tr::lng_hours(
 						tr::now,
 						lt_count,
 						hours);
@@ -549,21 +572,28 @@ void Widget::resetAccount() {
 						lt_minutes_count,
 						when);
 				}
-				Ui::show(Box<InformBox>(tr::lng_signin_reset_wait(
+				Ui::show(Ui::MakeInformBox(tr::lng_signin_reset_wait(
 					tr::now,
 					lt_phone_number,
 					Ui::FormatPhone(getData()->phone),
 					lt_when,
 					when)));
-			} else if (type == qstr("2FA_RECENT_CONFIRM")) {
-				Ui::show(Box<InformBox>(
-					tr::lng_signin_reset_cancelled(tr::now)));
+			} else if (type == u"2FA_RECENT_CONFIRM"_q) {
+				Ui::show(Ui::MakeInformBox(
+					tr::lng_signin_reset_cancelled()));
 			} else {
-				Ui::hideLayer();
+				getData()->controller->hideLayer();
 				getStep()->showError(rpl::single(Lang::Hard::ServerError()));
 			}
 		}).send();
-	})));
+	});
+
+	Ui::show(Ui::MakeConfirmBox({
+		.text = tr::lng_signin_sure_reset(),
+		.confirmed = callback,
+		.confirmText = tr::lng_signin_reset(),
+		.confirmStyle = &st::attentionBoxButton,
+	}));
 }
 
 void Widget::getNearestDC() {
@@ -659,6 +689,10 @@ void Widget::showControls() {
 }
 
 void Widget::setupNextButton() {
+	_next->entity()->setClickedCallback([=] { getStep()->submit(); });
+	_next->entity()->setTextTransform(
+		Ui::RoundButton::TextTransform::NoTransform);
+
 	_next->entity()->setText(getStep()->nextButtonText(
 	) | rpl::filter([](const QString &text) {
 		return !text.isEmpty();
@@ -695,62 +729,47 @@ void Widget::hideControls() {
 	_back->hide(anim::type::instant);
 }
 
-void Widget::showAnimated(const QPixmap &bgAnimCache, bool back) {
-	_showBack = back;
+void Widget::showAnimated(QPixmap oldContentCache, bool back) {
+	_showAnimation = nullptr;
 
-	(_showBack ? _cacheOver : _cacheUnder) = bgAnimCache;
-
-	_a_show.stop();
 	showControls();
 	floatPlayerHideAll();
-	(_showBack ? _cacheUnder : _cacheOver) = Ui::GrabWidget(this);
+	auto newContentCache = Ui::GrabWidget(this);
 	hideControls();
 	floatPlayerShowVisible();
 
-	_a_show.start(
-		[=] { animationCallback(); },
-		0.,
-		1.,
-		st::slideDuration,
-		Window::SlideAnimation::transition());
+	_showAnimation = std::make_unique<Window::SlideAnimation>();
+	_showAnimation->setDirection(back
+		? Window::SlideDirection::FromLeft
+		: Window::SlideDirection::FromRight);
+	_showAnimation->setRepaintCallback([=] { update(); });
+	_showAnimation->setFinishedCallback([=] { showFinished(); });
+	_showAnimation->setPixmaps(oldContentCache, newContentCache);
+	_showAnimation->start();
 
 	show();
 }
 
-void Widget::animationCallback() {
-	update();
-	if (!_a_show.animating()) {
-		_cacheUnder = _cacheOver = QPixmap();
+void Widget::showFinished() {
+	_showAnimation = nullptr;
 
-		showControls();
-		getStep()->activate();
-	}
+	showControls();
+	getStep()->activate();
 }
 
 void Widget::paintEvent(QPaintEvent *e) {
-	bool trivial = (rect() == e->rect());
+	const auto trivial = (rect() == e->rect());
 	setMouseTracking(true);
 
 	QPainter p(this);
 	if (!trivial) {
 		p.setClipRect(e->rect());
 	}
-	p.fillRect(e->rect(), st::windowBg);
-	auto progress = _a_show.value(1.);
-	if (_a_show.animating()) {
-		auto coordUnder = _showBack ? anim::interpolate(-st::slideShift, 0, progress) : anim::interpolate(0, -st::slideShift, progress);
-		auto coordOver = _showBack ? anim::interpolate(0, width(), progress) : anim::interpolate(width(), 0, progress);
-		auto shadow = _showBack ? (1. - progress) : progress;
-		if (coordOver > 0) {
-			p.drawPixmap(QRect(0, 0, coordOver, height()), _cacheUnder, QRect(-coordUnder * cRetinaFactor(), 0, coordOver * cRetinaFactor(), height() * cRetinaFactor()));
-			p.setOpacity(shadow);
-			p.fillRect(0, 0, coordOver, height(), st::slideFadeOutBg);
-			p.setOpacity(1);
-		}
-		p.drawPixmap(coordOver, 0, _cacheOver);
-		p.setOpacity(shadow);
-		st::slideShadow.fill(p, QRect(coordOver - st::slideShadow.width(), 0, st::slideShadow.width(), height()));
+	if (_showAnimation) {
+		_showAnimation->paintContents(p);
+		return;
 	}
+	p.fillRect(e->rect(), st::windowBg);
 }
 
 void Widget::resizeEvent(QResizeEvent *e) {
@@ -766,13 +785,18 @@ void Widget::resizeEvent(QResizeEvent *e) {
 }
 
 void Widget::updateControlsGeometry() {
-	auto shown = _coverShownAnimation.value(1.);
+	const auto skip = st::introSettingsSkip;
+	const auto shown = _coverShownAnimation.value(1.);
 
-	auto controlsTopTo = getStep()->hasCover() ? st::introCoverHeight : 0;
-	auto controlsTop = anim::interpolate(_controlsTopFrom, controlsTopTo, shown);
-	_settings->moveToRight(st::introSettingsSkip, controlsTop + st::introSettingsSkip);
+	const auto controlsTop = anim::interpolate(
+		_controlsTopFrom,
+		getStep()->hasCover() ? st::introCoverHeight : 0,
+		shown);
+	_settings->moveToRight(skip, controlsTop + skip);
 	if (_update) {
-		_update->moveToRight(st::introSettingsSkip + _settings->width() + st::introSettingsSkip, _settings->y());
+		_update->moveToRight(
+			skip + _settings->width() + skip,
+			_settings->y());
 	}
 	_back->moveToLeft(0, controlsTop);
 
@@ -788,18 +812,24 @@ void Widget::updateControlsGeometry() {
 		? QRect(0, 0, width(), realNextTop)
 		: QRect());
 	if (_changeLanguage) {
-		_changeLanguage->moveToLeft((width() - _changeLanguage->width()) / 2, _next->y() + _next->height() + _changeLanguage->height());
+		_changeLanguage->moveToLeft(
+			(width() - _changeLanguage->width()) / 2,
+			_next->y() + _next->height() + _changeLanguage->height());
 	}
 	if (_resetAccount) {
-		_resetAccount->moveToLeft((width() - _resetAccount->width()) / 2, height() - st::introResetBottom - _resetAccount->height());
+		_resetAccount->moveToLeft(
+			(width() - _resetAccount->width()) / 2,
+			height() - st::introResetBottom - _resetAccount->height());
 	}
 	if (_terms) {
-		_terms->moveToLeft((width() - _terms->width()) / 2, height() - st::introTermsBottom - _terms->height());
+		_terms->moveToLeft(
+			(width() - _terms->width()) / 2,
+			height() - st::introTermsBottom - _terms->height());
 	}
 }
 
 void Widget::keyPressEvent(QKeyEvent *e) {
-	if (_a_show.animating() || getStep()->animating()) return;
+	if (_showAnimation || getStep()->animating()) return;
 
 	if (e->key() == Qt::Key_Escape || e->key() == Qt::Key_Back) {
 		if (getStep()->hasBack()) {
@@ -820,7 +850,7 @@ void Widget::backRequested() {
 		Core::App().domain().activate(parent);
 	} else {
 		moveToStep(
-			new StartWidget(this, _account, getData()),
+			Ui::CreateChild<StartWidget>(this, _account, getData()),
 			StackAction::Replace,
 			Animate::Back);
 	}

@@ -7,31 +7,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "media/streaming/media_streaming_common.h"
+
 namespace Storage {
 class StreamedFileDownloader;
 } // namespace Storage
 
-namespace Media {
-namespace Streaming {
+namespace Media::Streaming {
 
 struct LoadedPart {
-	int offset = 0;
+	int64 offset = 0;
 	QByteArray bytes;
 
-	static constexpr auto kFailedOffset = -1;
+	static constexpr auto kFailedOffset = int64(-1);
 
-	[[nodiscard]] bool valid(int size) const;
+	[[nodiscard]] bool valid(int64 size) const;
 };
 
 class Loader {
 public:
-	static constexpr auto kPartSize = 128 * 1024;
+	static constexpr auto kPartSize = int64(128 * 1024);
 
 	[[nodiscard]] virtual Storage::Cache::Key baseCacheKey() const = 0;
-	[[nodiscard]] virtual int size() const = 0;
+	[[nodiscard]] virtual int64 size() const = 0;
 
-	virtual void load(int offset) = 0;
-	virtual void cancel(int offset) = 0;
+	virtual void load(int64 offset) = 0;
+	virtual void cancel(int64 offset) = 0;
 	virtual void resetPriorities() = 0;
 	virtual void setPriority(int priority) = 0;
 	virtual void stop() = 0;
@@ -41,6 +42,8 @@ public:
 
 	// Parts will be sent from the main thread.
 	[[nodiscard]] virtual rpl::producer<LoadedPart> parts() const = 0;
+	[[nodiscard]] virtual auto speedEstimate() const
+		-> rpl::producer<SpeedEstimate> = 0;
 
 	virtual void attachDownloader(
 		not_null<Storage::StreamedFileDownloader*> downloader) = 0;
@@ -52,18 +55,18 @@ public:
 
 class PriorityQueue {
 public:
-	bool add(int value);
-	bool remove(int value);
+	bool add(int64 value);
+	bool remove(int64 value);
 	void resetPriorities();
 	[[nodiscard]] bool empty() const;
-	[[nodiscard]] std::optional<int> front() const;
-	[[nodiscard]] std::optional<int> take();
-	[[nodiscard]] base::flat_set<int> takeInRange(int from, int till);
+	[[nodiscard]] std::optional<int64> front() const;
+	[[nodiscard]] std::optional<int64> take();
+	[[nodiscard]] base::flat_set<int64> takeInRange(int64 from, int64 till);
 	void clear();
 
 private:
 	struct Entry {
-		int value = 0;
+		int64 value = 0;
 		int priority = 0;
 	};
 
@@ -74,5 +77,4 @@ private:
 
 };
 
-} // namespace Streaming
-} // namespace Media
+} // namespace Media::Streaming

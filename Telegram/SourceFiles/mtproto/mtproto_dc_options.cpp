@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/facade.h"
 #include "mtproto/connection_tcp.h"
 #include "storage/serialize_common.h"
-#include "base/qt_adapters.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
@@ -605,7 +604,7 @@ DcType DcOptions::dcType(ShiftedDcId shiftedDcId) const {
 		return DcType::Cdn;
 	}
 	const auto dcId = BareDcId(shiftedDcId);
-	if (isDownloadDcId(shiftedDcId) && hasMediaOnlyOptionsFor(dcId)) {
+	if (isMediaClusterDcId(shiftedDcId) && hasMediaOnlyOptionsFor(dcId)) {
 		return DcType::MediaCluster;
 	}
 	return DcType::Regular;
@@ -754,10 +753,13 @@ bool DcOptions::loadFromFile(const QString &path) {
 		return false;
 	}
 	QTextStream stream(&f);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	stream.setCodec("UTF-8");
+#endif // Qt < 6.0.0
 	while (!stream.atEnd()) {
+		static const auto RegExp = QRegularExpression(R"(\s)");
 		auto line = stream.readLine();
-		auto components = line.split(QRegularExpression(R"(\s)"), base::QStringSkipEmptyParts);
+		auto components = line.split(RegExp, Qt::SkipEmptyParts);
 		if (components.isEmpty() || components[0].startsWith('#')) {
 			continue;
 		}
@@ -783,9 +785,9 @@ bool DcOptions::loadFromFile(const QString &path) {
 		for (auto &option : components.mid(3)) {
 			if (option.startsWith('#')) {
 				break;
-			} else if (option == qstr("tcpo_only")) {
+			} else if (option == u"tcpo_only"_q) {
 				flags |= Flag::f_tcpo_only;
-			} else if (option == qstr("media_only")) {
+			} else if (option == u"media_only"_q) {
 				flags |= Flag::f_media_only;
 			} else {
 				return error();
@@ -816,7 +818,9 @@ bool DcOptions::writeToFile(const QString &path) const {
 		return false;
 	}
 	QTextStream stream(&f);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	stream.setCodec("UTF-8");
+#endif // Qt < 6.0.0
 
 	ReadLocker lock(this);
 	for (const auto &item : _data) {

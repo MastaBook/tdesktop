@@ -65,7 +65,7 @@ ImageWithLocation FromPhotoSize(
 				data.vw().v,
 				data.vh().v),
 			.bytes = bytes,
-			.bytesCount = bytes.size(),
+			.bytesCount = int(bytes.size()),
 		};
 	}, [&](const MTPDphotoSizeProgressive &data) {
 		// #TODO layer118
@@ -160,7 +160,7 @@ ImageWithLocation FromPhotoSize(
 				data.vw().v,
 				data.vh().v),
 			.bytes = bytes,
-			.bytesCount = bytes.size(),
+			.bytesCount = int(bytes.size()),
 		};
 	}, [&](const MTPDphotoSizeProgressive &data) {
 		if (data.vsizes().v.isEmpty()) {
@@ -238,7 +238,7 @@ ImageWithLocation FromPhotoSize(
 				data.vw().v,
 				data.vh().v),
 			.bytes = bytes,
-			.bytesCount = bytes.size(),
+			.bytesCount = int(bytes.size()),
 		};
 	}, [&](const MTPDphotoSizeProgressive &data) {
 		if (data.vsizes().v.isEmpty()) {
@@ -299,7 +299,7 @@ ImageWithLocation FromImageInMemory(
 			image.height()),
 		.bytes = bytes,
 		.preloaded = image,
-		.bytesCount = bytes.size(),
+		.bytesCount = int(bytes.size()),
 	};
 }
 
@@ -310,7 +310,7 @@ ImageLocation FromWebDocument(const MTPWebDocument &document) {
 		// We don't use size from WebDocument, because it is not reliable.
 		// It can be > 0 and different from the real size
 		// that we get in upload.WebFile result.
-		//auto filesize = 0; // data.vsize().v;
+		//auto filesize = int64(); // data.vsize().v;
 		return ImageLocation(
 			DownloadLocation{ WebFileLocation(
 				data.vurl().v,
@@ -323,7 +323,7 @@ ImageLocation FromWebDocument(const MTPWebDocument &document) {
 		// We don't use size from WebDocument, because it is not reliable.
 		// It can be > 0 and different from the real size
 		// that we get in upload.WebFile result.
-		//auto filesize = 0; // data.vsize().v;
+		//auto filesize = int64(); // data.vsize().v;
 		return ImageLocation(
 			DownloadLocation{ PlainUrlLocation{ qs(data.vurl()) } },
 			size.width(),
@@ -350,6 +350,10 @@ ImageWithLocation FromVideoSize(
 				data.vh().v),
 			.bytesCount = data.vsize().v,
 		};
+	}, [](const MTPDvideoSizeEmojiMarkup &) {
+		return ImageWithLocation();
+	}, [](const MTPDvideoSizeStickerMarkup &) {
+		return ImageWithLocation();
 	});
 }
 
@@ -372,6 +376,10 @@ ImageWithLocation FromVideoSize(
 				data.vh().v),
 			.bytesCount = data.vsize().v,
 		};
+	}, [](const MTPDvideoSizeEmojiMarkup &) {
+		return ImageWithLocation();
+	}, [](const MTPDvideoSizeStickerMarkup &) {
+		return ImageWithLocation();
 	});
 }
 

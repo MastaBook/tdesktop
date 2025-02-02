@@ -7,17 +7,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <rpl/variable.h>
+#include "data/data_message_reaction_id.h"
 #include "data/data_search_controller.h"
+#include "info/statistics/info_statistics_tag.h"
 #include "window/window_session_controller.h"
-#include "settings/settings_common.h"
+
+namespace Api {
+struct WhoReadList;
+} // namespace Api
+
+namespace Data {
+class ForumTopic;
+} // namespace Data
 
 namespace Ui {
 class SearchFieldController;
 } // namespace Ui
 
-namespace Info {
-namespace Settings {
+namespace Info::Settings {
 
 struct Tag {
 	explicit Tag(not_null<UserData*> self) : self(self) {
@@ -26,28 +33,116 @@ struct Tag {
 	not_null<UserData*> self;
 };
 
-} // namespace Settings
+} // namespace Info::Settings
+
+namespace Info::Downloads {
+
+struct Tag {
+};
+
+} // namespace Info::Downloads
+
+namespace Info::GlobalMedia {
+
+struct Tag {
+	explicit Tag(not_null<UserData*> self) : self(self) {
+	}
+
+	not_null<UserData*> self;
+};
+
+} // namespace Info::GlobalMedia
+
+namespace Info::Stories {
+
+enum class Tab {
+	Saved,
+	Archive,
+};
+
+struct Tag {
+	explicit Tag(not_null<PeerData*> peer, Tab tab = {})
+	: peer(peer)
+	, tab(tab) {
+	}
+
+	not_null<PeerData*> peer;
+	Tab tab = {};
+};
+
+} // namespace Info::Stories
+
+namespace Info::BotStarRef {
+
+enum class Type : uchar {
+	Setup,
+	Join,
+};
+struct Tag {
+	Tag(not_null<PeerData*> peer, Type type) : peer(peer), type(type) {
+	}
+
+	not_null<PeerData*> peer;
+	Type type = {};
+};
+
+} // namespace Info::BotStarRef
+
+namespace Info {
 
 class Key {
 public:
-	Key(not_null<PeerData*> peer);
+	explicit Key(not_null<PeerData*> peer);
+	explicit Key(not_null<Data::ForumTopic*> topic);
 	Key(Settings::Tag settings);
+	Key(Downloads::Tag downloads);
+	Key(Stories::Tag stories);
+	Key(Statistics::Tag statistics);
+	Key(BotStarRef::Tag starref);
+	Key(GlobalMedia::Tag global);
 	Key(not_null<PollData*> poll, FullMsgId contextId);
+	Key(
+		std::shared_ptr<Api::WhoReadList> whoReadIds,
+		Data::ReactionId selected,
+		FullMsgId contextId);
 
 	PeerData *peer() const;
+	Data::ForumTopic *topic() const;
 	UserData *settingsSelf() const;
+	bool isDownloads() const;
+	bool isGlobalMedia() const;
+	PeerData *storiesPeer() const;
+	Stories::Tab storiesTab() const;
+	Statistics::Tag statisticsTag() const;
+	PeerData *starrefPeer() const;
+	BotStarRef::Type starrefType() const;
 	PollData *poll() const;
 	FullMsgId pollContextId() const;
+	std::shared_ptr<Api::WhoReadList> reactionsWhoReadIds() const;
+	Data::ReactionId reactionsSelected() const;
+	FullMsgId reactionsContextId() const;
 
 private:
 	struct PollKey {
 		not_null<PollData*> poll;
 		FullMsgId contextId;
 	};
+	struct ReactionsKey {
+		std::shared_ptr<Api::WhoReadList> whoReadIds;
+		Data::ReactionId selected;
+		FullMsgId contextId;
+	};
 	std::variant<
 		not_null<PeerData*>,
+		not_null<Data::ForumTopic*>,
 		Settings::Tag,
-		PollKey> _value;
+		Downloads::Tag,
+		Stories::Tag,
+		Statistics::Tag,
+		BotStarRef::Tag,
+		GlobalMedia::Tag,
+		PollKey,
+		ReactionsKey> _value;
 
 };
 
@@ -61,19 +156,34 @@ public:
 	enum class Type {
 		Profile,
 		Media,
+		GlobalMedia,
 		CommonGroups,
+		SimilarPeers,
+		RequestsList,
+		ReactionsList,
+		SavedSublists,
+		PeerGifts,
 		Members,
 		Settings,
+		Downloads,
+		Stories,
 		PollResults,
+		Statistics,
+		BotStarRef,
+		Boosts,
+		ChannelEarn,
+		BotEarn,
 	};
 	using SettingsType = ::Settings::Type;
 	using MediaType = Storage::SharedMediaType;
 
 	Section(Type type) : _type(type) {
-		Expects(type != Type::Media && type != Type::Settings);
+		Expects(type != Type::Media
+			&& type != Type::GlobalMedia
+			&& type != Type::Settings);
 	}
-	Section(MediaType mediaType)
-	: _type(Type::Media)
+	Section(MediaType mediaType, Type type = Type::Media)
+	: _type(type)
 	, _mediaType(mediaType) {
 	}
 	Section(SettingsType settingsType)
@@ -81,15 +191,15 @@ public:
 	, _settingsType(settingsType) {
 	}
 
-	Type type() const {
+	[[nodiscard]] Type type() const {
 		return _type;
 	}
-	MediaType mediaType() const {
-		Expects(_type == Type::Media);
+	[[nodiscard]] MediaType mediaType() const {
+		Expects(_type == Type::Media || _type == Type::GlobalMedia);
 
 		return _mediaType;
 	}
-	SettingsType settingsType() const {
+	[[nodiscard]] SettingsType settingsType() const {
 		Expects(_type == Type::Settings);
 
 		return _settingsType;
@@ -106,19 +216,47 @@ class AbstractController : public Window::SessionNavigation {
 public:
 	AbstractController(not_null<Window::SessionController*> parent);
 
-	virtual Key key() const = 0;
-	virtual PeerData *migrated() const = 0;
-	virtual Section section() const = 0;
+	[[nodiscard]] virtual Key key() const = 0;
+	[[nodiscard]] virtual PeerData *migrated() const = 0;
+	[[nodiscard]] virtual Section section() const = 0;
 
-	PeerData *peer() const;
-	PeerId migratedPeerId() const;
-	UserData *settingsSelf() const {
+	[[nodiscard]] PeerData *peer() const;
+	[[nodiscard]] PeerId migratedPeerId() const;
+	[[nodiscard]] Data::ForumTopic *topic() const {
+		return key().topic();
+	}
+	[[nodiscard]] UserData *settingsSelf() const {
 		return key().settingsSelf();
 	}
-	PollData *poll() const;
-	FullMsgId pollContextId() const {
+	[[nodiscard]] bool isDownloads() const {
+		return key().isDownloads();
+	}
+	[[nodiscard]] bool isGlobalMedia() const {
+		return key().isGlobalMedia();
+	}
+	[[nodiscard]] PeerData *storiesPeer() const {
+		return key().storiesPeer();
+	}
+	[[nodiscard]] Stories::Tab storiesTab() const {
+		return key().storiesTab();
+	}
+	[[nodiscard]] Statistics::Tag statisticsTag() const {
+		return key().statisticsTag();
+	}
+	[[nodiscard]] PeerData *starrefPeer() const {
+		return key().starrefPeer();
+	}
+	[[nodiscard]] BotStarRef::Type starrefType() const {
+		return key().starrefType();
+	}
+	[[nodiscard]] PollData *poll() const;
+	[[nodiscard]] FullMsgId pollContextId() const {
 		return key().pollContextId();
 	}
+	[[nodiscard]] auto reactionsWhoReadIds() const
+		-> std::shared_ptr<Api::WhoReadList>;
+	[[nodiscard]] Data::ReactionId reactionsSelected() const;
+	[[nodiscard]] FullMsgId reactionsContextId() const;
 
 	virtual void setSearchEnabledByContent(bool enabled) {
 	}
@@ -127,6 +265,7 @@ public:
 		int limitBefore,
 		int limitAfter) const;
 	virtual rpl::producer<QString> mediaSourceQueryValue() const;
+	virtual rpl::producer<QString> searchQueryValue() const;
 
 	void showSection(
 		std::shared_ptr<Window::SectionMemento> memento,
@@ -165,11 +304,12 @@ public:
 		return _section;
 	}
 
-	bool validateMementoPeer(
+	[[nodiscard]] bool validateMementoPeer(
 		not_null<ContentMemento*> memento) const;
 
-	Wrap wrap() const;
-	rpl::producer<Wrap> wrapValue() const;
+	[[nodiscard]] Wrap wrap() const;
+	[[nodiscard]] rpl::producer<Wrap> wrapValue() const;
+	[[nodiscard]] not_null<Ui::RpWidget*> wrapWidget() const;
 	void setSection(not_null<ContentMemento*> memento);
 
 	Ui::SearchFieldController *searchFieldController() const {
@@ -184,13 +324,10 @@ public:
 		int limitBefore,
 		int limitAfter) const override;
 	rpl::producer<QString> mediaSourceQueryValue() const override;
+	rpl::producer<QString> searchQueryValue() const override;
 	bool takeSearchStartsFocused() {
 		return base::take(_searchStartsFocused);
 	}
-
-	void setCanSaveChanges(rpl::producer<bool> can);
-	rpl::producer<bool> canSaveChanges() const;
-	bool canSaveChangesNow() const;
 
 	void saveSearchState(not_null<ContentMemento*> memento);
 
@@ -199,6 +336,11 @@ public:
 		const Window::SectionShow &params = Window::SectionShow()) override;
 	void showBackFromStack(
 		const Window::SectionShow &params = Window::SectionShow()) override;
+
+	void removeFromStack(const std::vector<Section> &sections) const;
+
+	void takeStepData(not_null<Controller*> another);
+	std::any &stepDataReference();
 
 	rpl::lifetime &lifetime() {
 		return _lifetime;
@@ -212,6 +354,9 @@ private:
 	void updateSearchControllers(not_null<ContentMemento*> memento);
 	SearchQuery produceSearchQuery(const QString &query) const;
 	void setupMigrationViewer();
+	void setupTopicViewer();
+
+	void replaceWith(std::shared_ptr<Memento> memento);
 
 	not_null<WrapWidget*> _widget;
 	Key _key;
@@ -222,8 +367,10 @@ private:
 	std::unique_ptr<Ui::SearchFieldController> _searchFieldController;
 	std::unique_ptr<Api::DelayedSearchController> _searchController;
 	rpl::variable<bool> _seachEnabledByContent = false;
-	rpl::variable<bool> _canSaveChanges = false;
 	bool _searchStartsFocused = false;
+
+	// Data between sections based on steps.
+	std::any _stepData;
 
 	rpl::lifetime _lifetime;
 

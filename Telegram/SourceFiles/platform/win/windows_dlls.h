@@ -7,28 +7,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/platform/win/base_windows_h.h"
+#include "base/platform/win/base_windows_shlobj_h.h"
 
-#include <shlobj.h>
-#include <roapi.h>
+#include <windows.h>
+#include <shellapi.h>
+#include <ShellScalingApi.h>
 #include <dwmapi.h>
 #include <RestartManager.h>
 #include <psapi.h>
-
-#ifdef __MINGW32__
-#define __in
-#endif
 
 namespace Platform {
 namespace Dlls {
 
 void CheckLoadedModules();
-
-// UXTHEME.DLL
-inline HRESULT(__stdcall *SetWindowTheme)(
-	HWND hWnd,
-	LPCWSTR pszSubAppName,
-	LPCWSTR pszSubIdList);
 
 //inline void(__stdcall *RefreshImmersiveColorPolicyState)();
 //
@@ -72,35 +63,13 @@ inline void(__stdcall *SHChangeNotify)(
 	UINT uFlags,
 	__in_opt LPCVOID dwItem1,
 	__in_opt LPCVOID dwItem2);
-inline HRESULT(__stdcall *SetCurrentProcessExplicitAppUserModelID)(
-	__in PCWSTR AppID);
-
-// WTSAPI32.DLL
-
-inline BOOL(__stdcall *WTSRegisterSessionNotification)(
-	HWND hWnd,
-	DWORD dwFlags);
-inline BOOL(__stdcall *WTSUnRegisterSessionNotification)(
-	HWND hWnd);
 
 // PROPSYS.DLL
 
-inline HRESULT(__stdcall *PropVariantToString)(
-	_In_ REFPROPVARIANT propvar,
-	_Out_writes_(cch) PWSTR psz,
-	_In_ UINT cch);
 inline HRESULT(__stdcall *PSStringFromPropertyKey)(
 	_In_ REFPROPERTYKEY pkey,
 	_Out_writes_(cch) LPWSTR psz,
 	_In_ UINT cch);
-
-// DWMAPI.DLL
-
-inline HRESULT(__stdcall *DwmSetWindowAttribute)(
-	HWND hwnd,
-	DWORD dwAttribute,
-	_In_reads_bytes_(cbAttribute) LPCVOID pvAttribute,
-	DWORD cbAttribute);
 
 // PSAPI.DLL
 
@@ -151,6 +120,13 @@ struct WINDOWCOMPOSITIONATTRIBDATA {
 inline BOOL(__stdcall *SetWindowCompositionAttribute)(
 	HWND hWnd,
 	WINDOWCOMPOSITIONATTRIBDATA*);
+
+// SHCORE.DLL
+inline HRESULT(__stdcall *GetDpiForMonitor)(
+	_In_ HMONITOR hmonitor,
+	_In_ MONITOR_DPI_TYPE dpiType,
+	_Out_ UINT *dpiX,
+	_Out_ UINT *dpiY);
 
 } // namespace Dlls
 } // namespace Platform

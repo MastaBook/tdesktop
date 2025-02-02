@@ -5,7 +5,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-linux.md'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -24,7 +23,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-linux.md'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -43,75 +41,66 @@ on:
 jobs:
 
   linux:
-    name: CentOS 7
+    name: Rocky Linux 8
     runs-on: ubuntu-latest
-    container:
-      image: docker.pkg.github.com/telegramdesktop/tdesktop/centos_env
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    defaults:
-      run:
-        shell: scl enable devtoolset-9 -- bash --noprofile --norc -eo pipefail {0}
 
     strategy:
       matrix:
         defines:
           - ""
-          - "DESKTOP_APP_DISABLE_DBUS_INTEGRATION"
           - "DESKTOP_APP_DISABLE_X11_INTEGRATION"
-          - "DESKTOP_APP_DISABLE_WAYLAND_INTEGRATION"
 
     env:
-      UPLOAD_ARTIFACT: "false"
+      UPLOAD_ARTIFACT: "true"
 
     steps:
       - name: Get repository name.
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Clone.
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           path: ${{ env.REPO_NAME }}
 
       - name: First set up.
         run: |
-          gcc --version
-          ln -s $LibrariesPath Libraries
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+          docker pull ghcr.io/$GITHUB_REPOSITORY/centos_env
+          docker tag ghcr.io/$GITHUB_REPOSITORY/centos_env tdesktop:centos_env
 
       - name: Telegram Desktop build.
         run: |
-          cd $REPO_NAME/Telegram
+          cd $REPO_NAME
 
           DEFINE=""
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
-            if [ "${{ matrix.defines }}" == "DESKTOP_APP_DISABLE_DBUS_INTEGRATION" ]; then
-              DEFINE="$DEFINE -D DESKTOP_APP_DISABLE_WEBKITGTK=ON"
-            fi
             echo Define from matrix: $DEFINE
             echo "ARTIFACT_NAME=Telegram_${{ matrix.defines }}" >> $GITHUB_ENV
           else
             echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
           fi
 
-          ./configure.sh \
+          docker run --rm \
+          -u $(id -u) \
+          -v $PWD:/usr/src/tdesktop \
+          -e CONFIG=Debug \
+          tdesktop:centos_env \
+          /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+          -D CMAKE_C_FLAGS_DEBUG="" \
+          -D CMAKE_CXX_FLAGS_DEBUG="" \
           -D CMAKE_C_FLAGS="-Werror" \
           -D CMAKE_CXX_FLAGS="-Werror" \
           -D CMAKE_EXE_LINKER_FLAGS="-s" \
           -D TDESKTOP_API_TEST=ON \
-          -D DESKTOP_APP_USE_PACKAGED=OFF \
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
           $DEFINE
 
-          cd ../out/Debug
-          make -j$(nproc)
-
       - name: Check.
         run: |
-          filePath="$REPO_NAME/out/Debug/bin/Telegram"
+          filePath="$REPO_NAME/out/Debug/Telegram"
           if test -f "$filePath"; then
             echo "Build successfully done! :)"
 
@@ -125,12 +114,12 @@ jobs:
       - name: Move artifact.
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
-          cd $REPO_NAME/out/Debug/bin
+          cd $REPO_NAME/out/Debug
           mkdir artifact
-          mv Telegram artifact/
-      - uses: actions/upload-artifact@master
+          mv {Telegram,Updater} artifact/
+      - uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         name: Upload artifact.
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.REPO_NAME }}/out/Debug/bin/artifact/
+          path: ${{ env.REPO_NAME }}/out/Debug/artifact/

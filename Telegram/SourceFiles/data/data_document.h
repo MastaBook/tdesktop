@@ -12,13 +12,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_types.h"
 #include "data/data_cloud_file.h"
 #include "core/file_location.h"
-#include "ui/image/image.h"
 
+enum class ChatRestriction;
 class mtpFileLoader;
 
 namespace Images {
 class Source;
 } // namespace Images
+
+namespace Core {
+enum class NameType : uchar;
+} // namespace Core
 
 namespace Storage {
 namespace Cache {
@@ -27,15 +31,18 @@ struct Key;
 } // namespace Storage
 
 namespace Media {
-namespace Streaming {
-class Loader;
-} // namespace Streaming
+struct VideoQuality;
 } // namespace Media
+
+namespace Media::Streaming {
+class Loader;
+} // namespace Media::Streaming
 
 namespace Data {
 class Session;
 class DocumentMedia;
 class ReplyPreview;
+enum class StickersType : uchar;
 } // namespace Data
 
 namespace Main {
@@ -57,27 +64,42 @@ struct DocumentAdditionalData {
 
 };
 
-struct StickerData : public DocumentAdditionalData {
-	Data::FileOrigin setOrigin() const;
+enum class StickerType : uchar {
+	Webp,
+	Tgs,
+	Webm,
+};
 
-	bool animated = false;
+struct StickerData : public DocumentAdditionalData {
+	[[nodiscard]] Data::FileOrigin setOrigin() const;
+	[[nodiscard]] bool isStatic() const;
+	[[nodiscard]] bool isLottie() const;
+	[[nodiscard]] bool isAnimated() const;
+	[[nodiscard]] bool isWebm() const;
+
 	QString alt;
 	StickerSetIdentifier set;
+	StickerType type = StickerType::Webp;
+	Data::StickersType setType = Data::StickersType();
 };
 
 struct SongData : public DocumentAdditionalData {
-	int32 duration = 0;
 	QString title, performer;
-
 };
 
 struct VoiceData : public DocumentAdditionalData {
 	~VoiceData();
 
-	int duration = 0;
 	VoiceWaveform waveform;
 	char wavemax = 0;
 };
+
+struct VideoData : public DocumentAdditionalData {
+	QString codec;
+	std::vector<not_null<DocumentData*>> qualities;
+};
+
+using RoundData = VoiceData;
 
 namespace Serialize {
 class Document;
@@ -93,8 +115,16 @@ public:
 
 	void setattributes(
 		const QVector<MTPDocumentAttribute> &attributes);
+	void setVideoQualities(const QVector<MTPDocument> &list);
 
 	void automaticLoadSettingsChanged();
+	void setVideoQualities(std::vector<not_null<DocumentData*>> qualities);
+	[[nodiscard]] int resolveVideoQuality() const;
+	[[nodiscard]] auto resolveQualities(HistoryItem *context) const
+		-> const std::vector<not_null<DocumentData*>> &;
+	[[nodiscard]] not_null<DocumentData*> chooseQuality(
+		HistoryItem *context,
+		Media::VideoQuality request);
 
 	[[nodiscard]] bool loading() const;
 	[[nodiscard]] QString loadingFilePath() const;
@@ -106,26 +136,35 @@ public:
 		bool autoLoading = false);
 	void cancel();
 	[[nodiscard]] bool cancelled() const;
+	void resetCancelled();
 	[[nodiscard]] float64 progress() const;
-	[[nodiscard]] int loadOffset() const;
+	[[nodiscard]] int64 loadOffset() const;
 	[[nodiscard]] bool uploading() const;
 	[[nodiscard]] bool loadedInMediaCache() const;
 	void setLoadedInMediaCache(bool loaded);
 
+	[[nodiscard]] ChatRestriction requiredSendRight() const;
+
 	void setWaitingForAlbum();
 	[[nodiscard]] bool waitingForAlbum() const;
 
-	[[nodiscard]] const Core::FileLocation &location(bool check = false) const;
+	[[nodiscard]] const Core::FileLocation &location(
+		bool check = false) const;
 	void setLocation(const Core::FileLocation &loc);
 
 	bool saveFromData();
 	bool saveFromDataSilent();
 	[[nodiscard]] QString filepath(bool check = false) const;
 
+	void forceToCache(bool force);
 	[[nodiscard]] bool saveToCache() const;
 
-	[[nodiscard]] Image *getReplyPreview(Data::FileOrigin origin);
-	[[nodiscard]] bool replyPreviewLoaded() const;
+	[[nodiscard]] Image *getReplyPreview(
+		Data::FileOrigin origin,
+		not_null<PeerData*> context,
+		bool spoiler);
+	[[nodiscard]] Image *getReplyPreview(not_null<HistoryItem*> item);
+	[[nodiscard]] bool replyPreviewLoaded(bool spoiler) const;
 
 	[[nodiscard]] StickerData *sticker() const;
 	[[nodiscard]] Data::FileOrigin stickerSetOrigin() const;
@@ -135,18 +174,25 @@ public:
 	[[nodiscard]] const SongData *song() const;
 	[[nodiscard]] VoiceData *voice();
 	[[nodiscard]] const VoiceData *voice() const;
+	[[nodiscard]] RoundData *round();
+	[[nodiscard]] const RoundData *round() const;
+	[[nodiscard]] VideoData *video();
+	[[nodiscard]] const VideoData *video() const;
 
+	void forceIsStreamedAnimation();
 	[[nodiscard]] bool isVoiceMessage() const;
 	[[nodiscard]] bool isVideoMessage() const;
 	[[nodiscard]] bool isSong() const;
 	[[nodiscard]] bool isSongWithCover() const;
 	[[nodiscard]] bool isAudioFile() const;
 	[[nodiscard]] bool isVideoFile() const;
+	[[nodiscard]] bool isSilentVideo() const;
 	[[nodiscard]] bool isAnimation() const;
 	[[nodiscard]] bool isGifv() const;
 	[[nodiscard]] bool isTheme() const;
 	[[nodiscard]] bool isSharedMediaMusic() const;
-	[[nodiscard]] TimeId getDuration() const;
+	[[nodiscard]] crl::time duration() const;
+	[[nodiscard]] bool hasDuration() const;
 	[[nodiscard]] bool isImage() const;
 	void recountIsImage();
 	[[nodiscard]] bool supportsStreaming() const;
@@ -157,6 +203,10 @@ public:
 	[[nodiscard]] bool isPatternWallPaper() const;
 	[[nodiscard]] bool isPatternWallPaperPNG() const;
 	[[nodiscard]] bool isPatternWallPaperSVG() const;
+	[[nodiscard]] bool isPremiumSticker() const;
+	[[nodiscard]] bool isPremiumEmoji() const;
+	[[nodiscard]] bool emojiUsesTextColor() const;
+	void overrideEmojiUsesTextColor(bool value);
 
 	[[nodiscard]] bool hasThumbnail() const;
 	[[nodiscard]] bool thumbnailLoading() const;
@@ -175,7 +225,8 @@ public:
 	void updateThumbnails(
 		const InlineImageLocation &inlineThumbnail,
 		const ImageWithLocation &thumbnail,
-		const ImageWithLocation &videoThumbnail);
+		const ImageWithLocation &videoThumbnail,
+		bool isPremiumSticker);
 
 	[[nodiscard]] QByteArray inlineThumbnailBytes() const {
 		return _inlineThumbnailBytes;
@@ -203,6 +254,9 @@ public:
 
 	[[nodiscard]] Storage::Cache::Key bigFileBaseCacheKey() const;
 
+	void setStoryMedia(bool value);
+	[[nodiscard]] bool storyMedia() const;
+
 	void setRemoteLocation(
 		int32 dc,
 		uint64 access,
@@ -223,8 +277,9 @@ public:
 	void collectLocalData(not_null<DocumentData*> local);
 
 	[[nodiscard]] QString filename() const;
+	[[nodiscard]] Core::NameType nameType() const;
 	[[nodiscard]] QString mimeString() const;
-	[[nodiscard]] bool hasMimeType(QLatin1String mime) const;
+	[[nodiscard]] bool hasMimeType(const QString &mime) const;
 	void setMimeString(const QString &mime);
 
 	[[nodiscard]] bool hasAttachedStickers() const;
@@ -233,7 +288,7 @@ public:
 	[[nodiscard]] Storage::Cache::Key cacheKey() const;
 	[[nodiscard]] uint8 cacheTag() const;
 
-	[[nodiscard]] bool canBeStreamed() const;
+	[[nodiscard]] bool canBeStreamed(HistoryItem *item) const;
 	[[nodiscard]] auto createStreamingLoader(
 		Data::FileOrigin origin,
 		bool forceRemoteLoader) const
@@ -242,27 +297,34 @@ public:
 
 	void setInappPlaybackFailed();
 	[[nodiscard]] bool inappPlaybackFailed() const;
+	[[nodiscard]] int videoPreloadPrefix() const;
+	[[nodiscard]] StorageFileLocation videoPreloadLocation() const;
 
 	DocumentId id = 0;
-	DocumentType type = FileDocument;
+	int64 size = 0;
 	QSize dimensions;
 	int32 date = 0;
-	int32 size = 0;
-
+	DocumentType type = FileDocument;
 	FileStatus status = FileReady;
 
 	std::unique_ptr<Data::UploadState> uploadingData;
 
 private:
-	enum class Flag : uchar {
-		StreamingMaybeYes = 0x01,
-		StreamingMaybeNo = 0x02,
-		StreamingPlaybackFailed = 0x04,
-		ImageType = 0x08,
-		DownloadCancelled = 0x10,
-		LoadedInMediaCache = 0x20,
-		HasAttachedStickers = 0x40,
-		InlineThumbnailIsPath = 0x80,
+	enum class Flag : ushort {
+		StreamingMaybeYes = 0x0001,
+		StreamingMaybeNo = 0x0002,
+		StreamingPlaybackFailed = 0x0004,
+		ImageType = 0x0008,
+		DownloadCancelled = 0x0010,
+		LoadedInMediaCache = 0x0020,
+		HasAttachedStickers = 0x0040,
+		InlineThumbnailIsPath = 0x0080,
+		ForceToCache = 0x0100,
+		PremiumSticker = 0x0200,
+		PossibleCoverThumbnail = 0x0400,
+		UseTextColor = 0x0800,
+		StoryDocument = 0x1000,
+		SilentVideo = 0x2000,
 	};
 	using Flags = base::flags<Flag>;
 	friend constexpr bool is_flag_type(Flag) { return true; };
@@ -296,6 +358,8 @@ private:
 	void validateLottieSticker();
 	void setMaybeSupportsStreaming(bool supports);
 	void setLoadedInMediaCacheLocation();
+	void setFileName(const QString &remoteFileName);
+	bool enforceNameType(Core::NameType nameType);
 
 	void finishLoad();
 	void handleLoaderUpdates();
@@ -303,8 +367,11 @@ private:
 
 	bool saveFromDataChecked();
 
+	void refreshPossibleCoverThumbnail();
+
 	const not_null<Data::Session*> _owner;
 
+	int _videoPreloadPrefix = 0;
 	// Two types of location: from MTProto by dc+access or from web by url
 	int32 _dc = 0;
 	uint64 _access = 0;
@@ -320,12 +387,13 @@ private:
 	std::unique_ptr<Data::ReplyPreview> _replyPreview;
 	std::weak_ptr<Data::DocumentMedia> _media;
 	PhotoData *_goodThumbnailPhoto = nullptr;
+	crl::time _duration = -1;
 
 	Core::FileLocation _location;
 	std::unique_ptr<DocumentAdditionalData> _additional;
-	int32 _duration = -1;
 	mutable Flags _flags = kStreamingSupportedUnknown;
 	GoodThumbnailState _goodThumbnailState = GoodThumbnailState();
+	Core::NameType _nameType = Core::NameType();
 	std::unique_ptr<FileLoader> _loader;
 
 };

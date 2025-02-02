@@ -15,18 +15,27 @@ class LocationPoint;
 
 namespace Platform {
 
-bool InFlatpak();
-bool InSnap();
-
-QString AppRuntimeDirectory();
-QString GetIconName();
-
-void InstallLauncher(bool force = false);
-
 inline void IgnoreApplicationActivationRightNow() {
 }
 
 inline void WriteCrashDumpDetails() {
+}
+
+inline void AutostartRequestStateFromSystem(Fn<void(bool)> callback) {
+}
+
+inline bool PreventsQuit(Core::QuitReason reason) {
+	return false;
+}
+
+inline void ActivateThisProcess() {
+}
+
+inline uint64 ActivationWindowId(not_null<QWidget*> window) {
+	return 1;
+}
+
+inline void ActivateOtherProcess(uint64 processId, uint64 windowId) {
 }
 
 } // namespace Platform
@@ -38,15 +47,11 @@ inline void psCheckLocalSocket(const QString &serverName) {
 	}
 }
 
-void psActivateProcess(uint64 pid = 0);
 QString psAppDataPath();
-void psAutoStart(bool start, bool silent = false);
 void psSendToMenu(bool send, bool silent = false);
 
 int psCleanup();
 int psFixPrevious();
-
-void psNewVersion();
 
 inline QByteArray psDownloadPathBookmark(const QString &path) {
 	return QByteArray();

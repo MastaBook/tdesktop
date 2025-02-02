@@ -30,6 +30,9 @@ public:
 		return _title.toString();
 	}
 
+	bool aboveTextByDefault() const override {
+		return false;
+	}
 	bool hideMessageText() const override {
 		return false;
 	}
@@ -70,14 +73,8 @@ public:
 		return _attach.get();
 	}
 
-	bool hasHeavyPart() const override {
-		return _attach ? _attach->hasHeavyPart() : false;
-	}
-	void unloadHeavyPart() override {
-		if (_attach) {
-			_attach->unloadHeavyPart();
-		}
-	}
+	bool hasHeavyPart() const override;
+	void unloadHeavyPart() override;
 
 private:
 	QSize countOptimalSize() override;

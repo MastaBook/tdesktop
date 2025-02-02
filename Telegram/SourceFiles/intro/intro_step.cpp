@@ -8,20 +8,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_step.h"
 
 #include "intro/intro_widget.h"
+#include "intro/intro_signup.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
 #include "lang/lang_cloud_manager.h"
 #include "main/main_account.h"
+#include "main/main_app_config.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "boxes/abstract_box.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "apiwrap.h"
+#include "api/api_peer_photo.h"
 #include "mainwindow.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/labels.h"
 #include "ui/wrap/fade_wrap.h"
@@ -95,7 +99,19 @@ Step::Step(
 
 	_descriptionText.value(
 	) | rpl::start_with_next([=](const TextWithEntities &text) {
-		_description->entity()->setMarkedText(text);
+		const auto label = _description->entity();
+		const auto hasSpoiler = ranges::contains(
+			text.entities,
+			EntityType::Spoiler,
+			&EntityInText::type);
+		if (hasSpoiler) {
+			label->setMarkedText(
+				text,
+				CommonTextContext{ [=] { label->update(); } });
+		} else {
+			label->setMarkedText(text);
+		}
+		label->setAttribute(Qt::WA_TransparentForMouseEvents, hasSpoiler);
 		updateLabelsPosition();
 	}, lifetime());
 }
@@ -117,6 +133,10 @@ rpl::producer<QString> Step::nextButtonText() const {
 	return tr::lng_intro_next();
 }
 
+rpl::producer<const style::RoundButton*> Step::nextButtonStyle() const {
+	return rpl::single((const style::RoundButton*)(nullptr));
+}
+
 void Step::goBack() {
 	if (_goCallback) {
 		_goCallback(nullptr, StackAction::Back, Animate::Back);
@@ -135,13 +155,36 @@ void Step::goReplace(Step *step, Animate animate) {
 	}
 }
 
+void Step::finish(const MTPauth_Authorization &auth, QImage &&photo) {
+	auth.match([&](const MTPDauth_authorization &data) {
+		if (data.vuser().type() != mtpc_user
+			|| !data.vuser().c_user().is_self()) {
+			showError(rpl::single(Lang::Hard::ServerError())); // wtf?
+			return;
+		}
+		finish(data.vuser(), std::move(photo));
+	}, [&](const MTPDauth_authorizationSignUpRequired &data) {
+		if (const auto terms = data.vterms_of_service()) {
+			terms->match([&](const MTPDhelp_termsOfService &data) {
+				getData()->termsLock = Window::TermsLock::FromMTP(
+					nullptr,
+					data);
+			});
+		} else {
+			getData()->termsLock = Window::TermsLock();
+		}
+		goReplace<SignupWidget>(Animate::Forward);
+	});
+}
+
 void Step::finish(const MTPUser &user, QImage &&photo) {
 	if (user.type() != mtpc_user
 		|| !user.c_user().is_self()
 		|| !user.c_user().vid().v) {
 		// No idea what to do here.
 		// We could've reset intro and MTP, but this really should not happen.
-		Ui::show(Box<InformBox>("Internal error: bad user.is_self() after sign in."));
+		Ui::show(Ui::MakeInformBox(
+			"Internal error: bad user.is_self() after sign in."));
 		return;
 	}
 
@@ -162,17 +205,19 @@ void Step::finish(const MTPUser &user, QImage &&photo) {
 	}
 
 	api().request(MTPmessages_GetDialogFilters(
-	)).done([=](const MTPVector<MTPDialogFilter> &result) {
-		createSession(user, photo, result.v);
-	}).fail([=](const MTP::Error &error) {
-		createSession(user, photo, QVector<MTPDialogFilter>());
+	)).done([=](const MTPmessages_DialogFilters &result) {
+		const auto &d = result.data();
+		createSession(user, photo, d.vfilters().v, d.is_tags_enabled());
+	}).fail([=] {
+		createSession(user, photo, QVector<MTPDialogFilter>(), false);
 	}).send();
 }
 
 void Step::createSession(
 		const MTPUser &user,
 		QImage photo,
-		const QVector<MTPDialogFilter> &filters) {
+		const QVector<MTPDialogFilter> &filters,
+		bool tagsEnabled) {
 	// Save the default language if we've suggested some other and user ignored it.
 	const auto currentId = Lang::Id();
 	const auto defaultId = Lang::DefaultLanguageId();
@@ -183,21 +228,29 @@ void Step::createSession(
 	}
 
 	auto settings = std::make_unique<Main::SessionSettings>();
-	settings->setDialogsFiltersEnabled(!filters.isEmpty());
+	const auto hasFilters = ranges::contains(
+		filters,
+		mtpc_dialogFilter,
+		&MTPDialogFilter::type);
+	settings->setDialogsFiltersEnabled(hasFilters);
 
 	const auto account = _account;
 	account->createSession(user, std::move(settings));
 
 	// "this" is already deleted here by creating the main widget.
+	account->local().enforceModernStorageIdBots();
 	account->local().writeMtpData();
 	auto &session = account->session();
-	session.data().chatsFilters().setPreloaded(filters);
-	if (!filters.isEmpty()) {
+	session.data().chatsFilters().setPreloaded(filters, tagsEnabled);
+	if (hasFilters) {
 		session.saveSettingsDelayed();
 	}
 	if (!photo.isNull()) {
-		session.api().uploadPeerPhoto(session.user(), std::move(photo));
+		session.api().peerPhoto().upload(
+			session.user(),
+			{ std::move(photo) });
 	}
+	account->appConfig().refresh();
 	if (session.supportMode()) {
 		PrepareSupportMode(&session);
 	}
@@ -205,7 +258,7 @@ void Step::createSession(
 }
 
 void Step::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	paintAnimated(p, e->rect());
 }
 
@@ -241,15 +294,8 @@ void Step::setTitleText(rpl::producer<QString> titleText) {
 	_titleText = std::move(titleText);
 }
 
-void Step::setDescriptionText(
-		rpl::producer<QString> descriptionText) {
-	setDescriptionText(
-		std::move(descriptionText) | Ui::Text::ToWithEntities());
-}
-
-void Step::setDescriptionText(
-		rpl::producer<TextWithEntities> richDescriptionText) {
-	_descriptionText = std::move(richDescriptionText);
+void Step::setDescriptionText(v::text::data &&descriptionText) {
+	_descriptionText = v::text::take_marked(std::move(descriptionText));
 }
 
 void Step::showFinished() {
@@ -260,7 +306,7 @@ void Step::showFinished() {
 	activate();
 }
 
-bool Step::paintAnimated(Painter &p, QRect clip) {
+bool Step::paintAnimated(QPainter &p, QRect clip) {
 	if (_slideAnimation) {
 		_slideAnimation->paintFrame(p, (width() - st::introStepWidth) / 2, contentTop(), width());
 		if (!_slideAnimation->animating()) {
@@ -307,22 +353,36 @@ bool Step::paintAnimated(Painter &p, QRect clip) {
 }
 
 void Step::fillSentCodeData(const MTPDauth_sentCode &data) {
-	const auto &type = data.vtype();
-	switch (type.type()) {
-	case mtpc_auth_sentCodeTypeApp: {
+	const auto bad = [](const char *type) {
+		LOG(("API Error: Should not be '%1'.").arg(type));
+	};
+	getData()->codeByTelegram = false;
+	getData()->codeByFragmentUrl = QString();
+	data.vtype().match([&](const MTPDauth_sentCodeTypeApp &data) {
 		getData()->codeByTelegram = true;
-		getData()->codeLength = type.c_auth_sentCodeTypeApp().vlength().v;
-	} break;
-	case mtpc_auth_sentCodeTypeSms: {
-		getData()->codeByTelegram = false;
-		getData()->codeLength = type.c_auth_sentCodeTypeSms().vlength().v;
-	} break;
-	case mtpc_auth_sentCodeTypeCall: {
-		getData()->codeByTelegram = false;
-		getData()->codeLength = type.c_auth_sentCodeTypeCall().vlength().v;
-	} break;
-	case mtpc_auth_sentCodeTypeFlashCall: LOG(("Error: should not be flashcall!")); break;
-	}
+		getData()->codeLength = data.vlength().v;
+	}, [&](const MTPDauth_sentCodeTypeSms &data) {
+		getData()->codeLength = data.vlength().v;
+	}, [&](const MTPDauth_sentCodeTypeFragmentSms &data) {
+		getData()->codeByFragmentUrl = qs(data.vurl());
+		getData()->codeLength = data.vlength().v;
+	}, [&](const MTPDauth_sentCodeTypeCall &data) {
+		getData()->codeLength = data.vlength().v;
+	}, [&](const MTPDauth_sentCodeTypeFlashCall &) {
+		bad("FlashCall");
+	}, [&](const MTPDauth_sentCodeTypeMissedCall &) {
+		bad("MissedCall");
+	}, [&](const MTPDauth_sentCodeTypeFirebaseSms &) {
+		bad("FirebaseSms");
+	}, [&](const MTPDauth_sentCodeTypeEmailCode &) {
+		bad("EmailCode");
+	}, [&](const MTPDauth_sentCodeTypeSmsWord &) {
+		bad("SmsWord");
+	}, [&](const MTPDauth_sentCodeTypeSmsPhrase &) {
+		bad("SmsPhrase");
+	}, [&](const MTPDauth_sentCodeTypeSetUpEmailRequired &) {
+		bad("SetUpEmailRequired");
+	});
 }
 
 void Step::showDescription() {
@@ -333,12 +393,22 @@ void Step::hideDescription() {
 	_description->hide(anim::type::normal);
 }
 
-void Step::paintContentSnapshot(Painter &p, const QPixmap &snapshot, float64 alpha, float64 howMuchHidden) {
+void Step::paintContentSnapshot(QPainter &p, const QPixmap &snapshot, float64 alpha, float64 howMuchHidden) {
 	if (!snapshot.isNull()) {
-		auto contentTop = anim::interpolate(height() - (snapshot.height() / cIntRetinaFactor()), height(), howMuchHidden);
+		const auto contentTop = anim::interpolate(
+			height() - (snapshot.height() / style::DevicePixelRatio()),
+			height(),
+			howMuchHidden);
 		if (contentTop < height()) {
 			p.setOpacity(alpha);
-			p.drawPixmap(QPoint(contentLeft(), contentTop), snapshot, QRect(0, 0, snapshot.width(), (height() - contentTop) * cIntRetinaFactor()));
+			p.drawPixmap(
+				QPoint(contentLeft(), contentTop),
+				snapshot,
+				QRect(
+					0,
+					0,
+					snapshot.width(),
+					(height() - contentTop) * style::DevicePixelRatio()));
 		}
 	}
 }
@@ -346,8 +416,8 @@ void Step::paintContentSnapshot(Painter &p, const QPixmap &snapshot, float64 alp
 void Step::prepareCoverMask() {
 	if (!_coverMask.isNull()) return;
 
-	auto maskWidth = cIntRetinaFactor();
-	auto maskHeight = st::introCoverHeight * cIntRetinaFactor();
+	auto maskWidth = style::DevicePixelRatio();
+	auto maskHeight = st::introCoverHeight * style::DevicePixelRatio();
 	auto mask = QImage(maskWidth, maskHeight, QImage::Format_ARGB32_Premultiplied);
 	auto maskInts = reinterpret_cast<uint32*>(mask.bits());
 	Assert(mask.depth() == (sizeof(uint32) << 3));
@@ -365,10 +435,17 @@ void Step::prepareCoverMask() {
 	_coverMask = Ui::PixmapFromImage(std::move(mask));
 }
 
-void Step::paintCover(Painter &p, int top) {
+void Step::paintCover(QPainter &p, int top) {
 	auto coverHeight = top + st::introCoverHeight;
 	if (coverHeight > 0) {
-		p.drawPixmap(QRect(0, 0, width(), coverHeight), _coverMask, QRect(0, -top * cIntRetinaFactor(), _coverMask.width(), coverHeight * cIntRetinaFactor()));
+		p.drawPixmap(
+			QRect(0, 0, width(), coverHeight),
+			_coverMask,
+			QRect(
+				0,
+				-top * style::DevicePixelRatio(),
+				_coverMask.width(),
+				coverHeight * style::DevicePixelRatio()));
 	}
 
 	auto left = 0;

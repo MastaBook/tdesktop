@@ -13,8 +13,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Ui {
 class InputField;
 class ScrollArea;
-class FadeShadow;
-class PlainShadow;
 class FlatLabel;
 class RoundButton;
 class VerticalLayout;
@@ -39,6 +37,11 @@ class EditScans;
 enum class FileType;
 struct ScanListData;
 
+struct EditDocumentCountry {
+	QString countryCode;
+	QString languageCode;
+};
+
 struct EditDocumentScheme {
 	enum class ValueClass {
 		Fields,
@@ -50,6 +53,7 @@ struct EditDocumentScheme {
 		OnlyIfError,
 		Shown,
 	};
+	using CountryInfo = EditDocumentCountry;
 	struct Row {
 		using Validator = Fn<std::optional<QString>(const QString &value)>;
 		using Formatter = Fn<QString(const QString &value)>;
@@ -69,9 +73,10 @@ struct EditDocumentScheme {
 	QString scansHeader;
 
 	QString additionalDependencyKey;
-	Fn<AdditionalVisibility(const QString &dependency)> additionalShown;
-	Fn<QString(const QString &dependency)> additionalHeader;
-	Fn<QString(const QString &dependency)> additionalDescription;
+	Fn<AdditionalVisibility(const CountryInfo &dependency)> additionalShown;
+	Fn<QString(const CountryInfo &dependency)> additionalHeader;
+	Fn<QString(const CountryInfo &dependency)> additionalDescription;
+	Fn<rpl::producer<CountryInfo>(const QString &)> preferredLanguage;
 
 };
 
@@ -150,8 +155,6 @@ private:
 	Scheme _scheme;
 
 	object_ptr<Ui::ScrollArea> _scroll;
-	object_ptr<Ui::FadeShadow> _topShadow;
-	object_ptr<Ui::PlainShadow> _bottomShadow;
 
 	QPointer<EditScans> _editScans;
 	QPointer<Ui::SlideWrap<Ui::FlatLabel>> _commonError;

@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_types.h"
 
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "storage/cache/storage_cache_types.h"
 #include "base/openssl_help.h"
 
@@ -18,6 +18,7 @@ constexpr auto kDocumentCacheTag = 0x0000000000000100ULL;
 constexpr auto kDocumentCacheMask = 0x00000000000000FFULL;
 constexpr auto kDocumentThumbCacheTag = 0x0000000000000200ULL;
 constexpr auto kDocumentThumbCacheMask = 0x00000000000000FFULL;
+constexpr auto kAudioAlbumThumbCacheTag = 0x0000000000000300ULL;
 constexpr auto kWebDocumentCacheTag = 0x0000020000000000ULL;
 constexpr auto kUrlCacheTag = 0x0000030000000000ULL;
 constexpr auto kGeoPointCacheTag = 0x0000040000000000ULL;
@@ -80,8 +81,17 @@ Storage::Cache::Key GeoPointCacheKey(const GeoPointLocation &location) {
 		| (uint32(location.height) & 0xFFFFU);
 	return Storage::Cache::Key{
 		Data::kGeoPointCacheTag | (uint64(zoomscale) << 32) | widthheight,
-		(uint64(std::round(std::abs(location.lat + 360.) * 1000000)) << 32)
-		| uint64(std::round(std::abs(location.lon + 360.) * 1000000))
+		(uint64(base::SafeRound(
+			std::abs(location.lat + 360.) * 1000000)) << 32)
+		| uint64(base::SafeRound(std::abs(location.lon + 360.) * 1000000))
+	};
+}
+
+Storage::Cache::Key AudioAlbumThumbCacheKey(
+		const AudioAlbumThumbLocation &location) {
+	return Storage::Cache::Key{
+		Data::kAudioAlbumThumbCacheTag,
+		location.documentId,
 	};
 }
 
@@ -92,7 +102,7 @@ void MessageCursor::fillFrom(not_null<const Ui::InputField*> field) {
 	position = cursor.position();
 	anchor = cursor.anchor();
 	const auto top = field->scrollTop().current();
-	scroll = (top != field->scrollTopMax()) ? top : QFIXED_MAX;
+	scroll = (top != field->scrollTopMax()) ? top : Ui::kQFixedMax;
 }
 
 void MessageCursor::applyTo(not_null<Ui::InputField*> field) {
@@ -104,8 +114,8 @@ void MessageCursor::applyTo(not_null<Ui::InputField*> field) {
 }
 
 PeerId PeerFromMessage(const MTPmessage &message) {
-	return message.match([](const MTPDmessageEmpty &) {
-		return PeerId(0);
+	return message.match([](const MTPDmessageEmpty &data) {
+		return data.vpeer_id() ? peerFromMTP(*data.vpeer_id()) : PeerId(0);
 	}, [](const auto &data) {
 		return peerFromMTP(data.vpeer_id());
 	});
@@ -132,6 +142,15 @@ TimeId DateFromMessage(const MTPmessage &message) {
 		return TimeId(0);
 	}, [](const auto &message) {
 		return message.vdate().v;
+	});
+}
+
+BusinessShortcutId BusinessShortcutIdFromMessage(
+		const MTPmessage &message) {
+	return message.match([](const MTPDmessage &data) {
+		return data.vquick_reply_shortcut_id().value_or_empty();
+	}, [](const auto &) {
+		return BusinessShortcutId();
 	});
 }
 

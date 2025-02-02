@@ -9,7 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/view/history_view_element.h"
 #include "history/admin_log/history_admin_log_item.h"
-#include "history/admin_log/history_admin_log_section.h"
+#include "history/admin_log/history_admin_log_filter_value.h"
+#include "menu/menu_antispam_validator.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
 #include "ui/widgets/tooltip.h"
@@ -17,10 +18,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 
 struct ChatRestrictionsInfo;
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
 
 namespace Main {
 class Session;
@@ -37,6 +34,8 @@ enum class PointState : char;
 namespace Ui {
 class PopupMenu;
 class ChatStyle;
+class ChatTheme;
+struct PeerUserpicView;
 } // namespace Ui
 
 namespace Window {
@@ -50,8 +49,7 @@ class SectionMemento;
 class InnerWidget final
 	: public Ui::RpWidget
 	, public Ui::AbstractTooltipShower
-	, public HistoryView::ElementDelegate
-	, private base::Subscriber {
+	, public HistoryView::ElementDelegate {
 public:
 	InnerWidget(
 		QWidget *parent,
@@ -94,17 +92,10 @@ public:
 
 	// HistoryView::ElementDelegate interface.
 	HistoryView::Context elementContext() override;
-	std::unique_ptr<HistoryView::Element> elementCreate(
-		not_null<HistoryMessage*> message,
-		HistoryView::Element *replacing = nullptr) override;
-	std::unique_ptr<HistoryView::Element> elementCreate(
-		not_null<HistoryService*> message,
-		HistoryView::Element *replacing = nullptr) override;
 	bool elementUnderCursor(
 		not_null<const HistoryView::Element*> view) override;
-	crl::time elementHighlightTime(
-		not_null<const HistoryItem*> item) override;
-	bool elementInSelectionMode() override;
+	HistoryView::SelectionModeResult elementInSelectionMode(
+		const HistoryView::Element *view) override;
 	bool elementIntersectsRange(
 		not_null<const HistoryView::Element*> view,
 		int from,
@@ -125,7 +116,7 @@ public:
 	void elementShowTooltip(
 		const TextWithEntities &text,
 		Fn<void()> hiddenCallback) override;
-	bool elementIsGifPaused() override;
+	bool elementAnimationsPaused() override;
 	bool elementHideReply(
 		not_null<const HistoryView::Element*> view) override;
 	bool elementShownUnread(
@@ -133,10 +124,27 @@ public:
 	void elementSendBotCommand(
 		const QString &command,
 		const FullMsgId &context) override;
+	void elementSearchInList(
+		const QString &query,
+		const FullMsgId &context) override;
 	void elementHandleViaClick(not_null<UserData*> bot) override;
 	bool elementIsChatWide() override;
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
-	void elementReplyTo(const FullMsgId &to) override;
+	void elementReplyTo(const FullReplyTo &to) override;
+	void elementStartInteraction(
+		not_null<const HistoryView::Element*> view) override;
+	void elementStartPremium(
+		not_null<const HistoryView::Element*> view,
+		HistoryView::Element *replacing) override;
+	void elementCancelPremium(
+		not_null<const HistoryView::Element*> view) override;
+	void elementStartEffect(
+		not_null<const HistoryView::Element*> view,
+		HistoryView::Element *replacing) override;
+	QString elementAuthorRank(
+		not_null<const HistoryView::Element*> view) override;
+	bool elementHideTopicButton(
+		not_null<const HistoryView::Element*> view) override;
 
 	~InnerWidget();
 
@@ -151,7 +159,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
 	void mouseDoubleClickEvent(QMouseEvent *e) override;
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void contextMenuEvent(QContextMenuEvent *e) override;
 
@@ -202,9 +210,14 @@ private:
 	void copyContextText(FullMsgId itemId);
 	void copySelectedText();
 	TextForMimeData getSelectedText() const;
-	void suggestRestrictUser(not_null<UserData*> user);
-	void restrictUser(not_null<UserData*> user, ChatRestrictionsInfo oldRights, ChatRestrictionsInfo newRights);
-	void restrictUserDone(not_null<UserData*> user, ChatRestrictionsInfo rights);
+	void suggestRestrictParticipant(not_null<PeerData*> participant);
+	void restrictParticipant(
+		not_null<PeerData*> participant,
+		ChatRestrictionsInfo oldRights,
+		ChatRestrictionsInfo newRights);
+	void restrictParticipantDone(
+		not_null<PeerData*> participant,
+		ChatRestrictionsInfo rights);
 
 	void requestAdmins();
 	void checkPreloadMore();
@@ -217,8 +230,12 @@ private:
 	void paintEmpty(Painter &p, not_null<const Ui::ChatStyle*> st);
 	void clearAfterFilterChange();
 	void clearAndRequestLog();
-	void addEvents(Direction direction, const QVector<MTPChannelAdminLogEvent> &events);
-	Element *viewForItem(const HistoryItem *item);
+	void addEvents(
+		Direction direction,
+		const QVector<MTPChannelAdminLogEvent> &events);
+	[[nodiscard]] Element *viewForItem(const HistoryItem *item);
+	[[nodiscard]] bool myView(
+		not_null<const HistoryView::Element*> view) const;
 
 	void toggleScrollDateShown();
 	void repaintScrollDateCallback();
@@ -264,9 +281,8 @@ private:
 	std::map<not_null<const HistoryItem*>, not_null<Element*>> _itemsByData;
 	base::flat_map<not_null<const HistoryItem*>, TimeId> _itemDates;
 	base::flat_set<FullMsgId> _animatedStickersPlayed;
-	base::flat_map<
-		not_null<PeerData*>,
-		std::shared_ptr<Data::CloudImageView>> _userpics, _userpicsCache;
+	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpics;
+	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpicsCache;
 	int _itemsTop = 0;
 	int _itemsWidth = 0;
 	int _itemsHeight = 0;
@@ -277,6 +293,7 @@ private:
 	Element *_visibleTopItem = nullptr;
 	int _visibleTopFromItem = 0;
 
+	bool _isChatWide = false;
 	bool _scrollDateShown = false;
 	Ui::Animations::Simple _scrollDateOpacity;
 	SingleQueuedInvokation _scrollDateCheck;
@@ -311,6 +328,7 @@ private:
 	Qt::CursorShape _cursor = style::cur_default;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
+	AntiSpamMenu::AntiSpamValidator _antiSpamValidator;
 
 	QPoint _trippleClickPoint;
 	base::Timer _trippleClickTimer;

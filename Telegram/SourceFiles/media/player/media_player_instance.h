@@ -12,6 +12,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class AudioMsgId;
 class DocumentData;
+class History;
+
+namespace Media {
+enum class RepeatMode;
+enum class OrderMode;
+} // namespace Media
 
 namespace Media {
 namespace Audio {
@@ -35,8 +41,14 @@ enum class Error;
 } // namespace Streaming
 } // namespace Media
 
+namespace base {
+class PowerSaveBlocker;
+} // namespace base
+
 namespace Media {
 namespace Player {
+
+extern const char kOptionDisableAutoplayNext[];
 
 class Instance;
 struct TrackState;
@@ -50,7 +62,7 @@ void SaveLastPlaybackPosition(
 
 not_null<Instance*> instance();
 
-class Instance : private base::Subscriber {
+class Instance final {
 public:
 	enum class Seeking {
 		Start,
@@ -60,7 +72,7 @@ public:
 
 	void play(AudioMsgId::Type type);
 	void pause(AudioMsgId::Type type);
-	void stop(AudioMsgId::Type type);
+	void stop(AudioMsgId::Type type, bool asFinished = false);
 	void playPause(AudioMsgId::Type type);
 	bool next(AudioMsgId::Type type);
 	bool previous(AudioMsgId::Type type);
@@ -97,24 +109,14 @@ public:
 	[[nodiscard]] View::PlaybackProgress *roundVideoPlayback(
 		HistoryItem *item) const;
 
+	[[nodiscard]] Streaming::Instance *roundVideoPreview(
+		not_null<DocumentData*> document) const;
+
 	[[nodiscard]] AudioMsgId current(AudioMsgId::Type type) const {
 		if (const auto data = getData(type)) {
 			return data->current;
 		}
 		return AudioMsgId();
-	}
-
-	[[nodiscard]] bool repeatEnabled(AudioMsgId::Type type) const {
-		if (const auto data = getData(type)) {
-			return data->repeatEnabled;
-		}
-		return false;
-	}
-	void toggleRepeat(AudioMsgId::Type type) {
-		if (const auto data = getData(type)) {
-			data->repeatEnabled = !data->repeatEnabled;
-			_repeatChangedNotifier.notify(type);
-		}
 	}
 
 	[[nodiscard]] bool isSeeking(AudioMsgId::Type type) const {
@@ -137,41 +139,39 @@ public:
 		FullMsgId to;
 	};
 
-	base::Observable<Switch> &switchToNextNotifier() {
-		return _switchToNextNotifier;
+	[[nodiscard]] rpl::producer<Switch> switchToNextEvents() const {
+		return _switchToNext.events();
 	}
-	base::Observable<bool> &playerWidgetOver() {
-		return _playerWidgetOver;
+	[[nodiscard]] rpl::producer<AudioMsgId::Type> tracksFinished() const {
+		return _tracksFinished.events();
 	}
-	base::Observable<AudioMsgId::Type> &tracksFinishedNotifier() {
-		return _tracksFinishedNotifier;
-	}
-	base::Observable<AudioMsgId::Type> &trackChangedNotifier() {
-		return _trackChangedNotifier;
-	}
-	base::Observable<AudioMsgId::Type> &repeatChangedNotifier() {
-		return _repeatChangedNotifier;
+	[[nodiscard]] rpl::producer<AudioMsgId::Type> trackChanged() const {
+		return _trackChanged.events();
 	}
 
-	rpl::producer<> playlistChanges(AudioMsgId::Type type) const;
+	[[nodiscard]] rpl::producer<> playlistChanges(
+		AudioMsgId::Type type) const;
 
-	rpl::producer<TrackState> updatedNotifier() const {
+	[[nodiscard]] rpl::producer<TrackState> updatedNotifier() const {
 		return _updatedNotifier.events();
 	}
 
-	rpl::producer<> stops(AudioMsgId::Type type) const;
-	rpl::producer<> startsPlay(AudioMsgId::Type type) const;
+	[[nodiscard]] rpl::producer<> stops(AudioMsgId::Type type) const;
+	[[nodiscard]] rpl::producer<> startsPlay(AudioMsgId::Type type) const;
 
-	rpl::producer<Seeking> seekingChanges(AudioMsgId::Type type) const;
+	[[nodiscard]] rpl::producer<Seeking> seekingChanges(
+		AudioMsgId::Type type) const;
 
-	bool pauseGifByRoundVideo() const;
-
-	void documentLoadProgress(DocumentData *document);
+	[[nodiscard]] rpl::producer<> closePlayerRequests() const {
+		return _closePlayerRequests.events();
+	}
+	void stopAndClose();
 
 private:
 	using SharedMediaType = Storage::SharedMediaType;
 	using SliceKey = SparseIdsMergedSlice::Key;
 	struct Streamed;
+	struct ShuffleData;
 	struct Data {
 		Data(AudioMsgId::Type type, SharedMediaType overview);
 		Data(Data &&other);
@@ -185,17 +185,23 @@ private:
 		std::optional<SparseIdsMergedSlice> playlistSlice;
 		std::optional<SliceKey> playlistSliceKey;
 		std::optional<SliceKey> playlistRequestedKey;
+		std::optional<SparseIdsMergedSlice> playlistOtherSlice;
+		std::optional<SliceKey> playlistOtherRequestedKey;
 		std::optional<int> playlistIndex;
 		rpl::lifetime playlistLifetime;
+		rpl::lifetime playlistOtherLifetime;
 		rpl::lifetime sessionLifetime;
 		rpl::event_stream<> playlistChanges;
 		History *history = nullptr;
+		MsgId topicRootId = 0;
 		History *migrated = nullptr;
 		Main::Session *session = nullptr;
-		bool repeatEnabled = false;
 		bool isPlaying = false;
 		bool resumeOnCallEnd = false;
 		std::unique_ptr<Streamed> streamed;
+		std::unique_ptr<ShuffleData> shuffleData;
+		std::unique_ptr<base::PowerSaveBlocker> powerSaveBlocker;
+		std::unique_ptr<base::PowerSaveBlocker> powerSaveBlockerVideo;
 	};
 
 	struct SeekingChanges {
@@ -225,13 +231,27 @@ private:
 
 	void setCurrent(const AudioMsgId &audioId);
 	void refreshPlaylist(not_null<Data*> data);
-	std::optional<SliceKey> playlistKey(not_null<Data*> data) const;
-	bool validPlaylist(not_null<Data*> data);
+	void refreshOtherPlaylist(not_null<Data*> data);
+	std::optional<SliceKey> playlistKey(not_null<const Data*> data) const;
+	bool validPlaylist(not_null<const Data*> data) const;
 	void validatePlaylist(not_null<Data*> data);
+	std::optional<SliceKey> playlistOtherKey(
+		not_null<const Data*> data) const;
+	bool validOtherPlaylist(not_null<const Data*> data) const;
+	void validateOtherPlaylist(not_null<Data*> data);
 	void playlistUpdated(not_null<Data*> data);
 	bool moveInPlaylist(not_null<Data*> data, int delta, bool autonext);
+	void updatePowerSaveBlocker(
+		not_null<Data*> data,
+		const TrackState &state);
 	HistoryItem *itemByIndex(not_null<Data*> data, int index);
 	void stopAndClear(not_null<Data*> data);
+
+	[[nodiscard]] MsgId computeCurrentUniversalId(
+		not_null<const Data*> data) const;
+	void validateShuffleData(not_null<Data*> data);
+	void setupShuffleData(not_null<Data*> data);
+	void ensureShuffleMove(not_null<Data*> data, int delta);
 
 	void handleStreamingUpdate(
 		not_null<Data*> data,
@@ -244,6 +264,13 @@ private:
 	void emitUpdate(AudioMsgId::Type type);
 	template <typename CheckCallback>
 	void emitUpdate(AudioMsgId::Type type, CheckCallback check);
+
+	[[nodiscard]] RepeatMode repeat(not_null<const Data*> data) const;
+	[[nodiscard]] rpl::producer<RepeatMode> repeatChanges(
+		not_null<const Data*> data) const;
+	[[nodiscard]] OrderMode order(not_null<const Data*> data) const;
+	[[nodiscard]] rpl::producer<OrderMode> orderChanges(
+		not_null<const Data*> data) const;
 
 	Data *getData(AudioMsgId::Type type) {
 		if (type == AudioMsgId::Type::Song) {
@@ -267,23 +294,24 @@ private:
 	void requestRoundVideoResize() const;
 	void requestRoundVideoRepaint() const;
 
-	void setHistory(not_null<Data*> data, History *history);
+	void setHistory(
+		not_null<Data*> data,
+		History *history,
+		Main::Session *sessionFallback = nullptr);
 	void setSession(not_null<Data*> data, Main::Session *session);
 
 	Data _songData;
 	Data _voiceData;
 	bool _roundPlaying = false;
 
-	base::Observable<Switch> _switchToNextNotifier;
-	base::Observable<bool> _playerWidgetOver;
-	base::Observable<AudioMsgId::Type> _tracksFinishedNotifier;
-	base::Observable<AudioMsgId::Type> _trackChangedNotifier;
-	base::Observable<AudioMsgId::Type> _repeatChangedNotifier;
-
+	rpl::event_stream<Switch> _switchToNext;
+	rpl::event_stream<AudioMsgId::Type> _tracksFinished;
+	rpl::event_stream<AudioMsgId::Type> _trackChanged;
 	rpl::event_stream<AudioMsgId::Type> _playerStopped;
 	rpl::event_stream<AudioMsgId::Type> _playerStartedPlay;
 	rpl::event_stream<TrackState> _updatedNotifier;
 	rpl::event_stream<SeekingChanges> _seekingChanges;
+	rpl::event_stream<> _closePlayerRequests;
 	rpl::lifetime _lifetime;
 
 };

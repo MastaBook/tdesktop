@@ -85,7 +85,7 @@ QString StateDescription(const BlobState &state, tr::phrase<> activeText) {
 		return tr::lng_emoji_set_loading(
 			tr::now,
 			lt_percent,
-			QString::number(int(std::round(percent))) + '%',
+			QString::number(int(base::SafeRound(percent))) + '%',
 			lt_progress,
 			Ui::FormatDownloadText(data.already, data.size));
 	}, [](const Failed &data) {
@@ -99,7 +99,7 @@ BlobLoader::BlobLoader(
 	int id,
 	MTP::DedicatedLoader::Location location,
 	const QString &folder,
-	int size)
+	int64 size)
 : QObject(parent)
 , _folder(folder)
 , _id(id)

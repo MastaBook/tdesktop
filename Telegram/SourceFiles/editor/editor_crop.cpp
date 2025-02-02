@@ -7,7 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "editor/editor_crop.h"
 
+#include "ui/userpic_view.h"
 #include "styles/style_editor.h"
+#include "styles/style_basic.h"
+#include "styles/style_dialogs.h"
 
 namespace Editor {
 namespace {
@@ -66,7 +69,7 @@ Crop::Crop(
 
 	paintRequest(
 	) | rpl::start_with_next([=] {
-		Painter p(this);
+		auto p = QPainter(this);
 
 		p.fillPath(_painterPath, st::photoCropFadeBg);
 		paintPoints(p);
@@ -92,7 +95,7 @@ void Crop::applyTransform(
 	const auto cropHolder = QRectF(QPointF(), scaledImageSize);
 	const auto cropHolderCenter = cropHolder.center();
 
-	auto matrix = QMatrix()
+	auto matrix = QTransform()
 		.translate(cropHolderCenter.x(), cropHolderCenter.y())
 		.scale(flipped ? -1 : 1, 1)
 		.rotate(angle)
@@ -126,7 +129,7 @@ void Crop::applyTransform(
 	}
 }
 
-void Crop::paintPoints(Painter &p) {
+void Crop::paintPoints(QPainter &p) {
 	p.save();
 	p.setPen(Qt::NoPen);
 	p.setBrush(st::photoCropPointFg);
@@ -145,18 +148,22 @@ void Crop::setCropPaint(QRectF &&rect) {
 	_painterPath.addRect(_innerRect);
 	if (_data.cropType == EditorData::CropType::Ellipse) {
 		_painterPath.addEllipse(_cropPaint);
+	} else if (_data.cropType == EditorData::CropType::RoundedRect) {
+		const auto radius = std::min(_cropPaint.width(), _cropPaint.height())
+			* Ui::ForumUserpicRadiusMultiplier();
+		_painterPath.addRoundedRect(_cropPaint, radius, radius);
 	} else {
 		_painterPath.addRect(_cropPaint);
 	}
 }
 
 void Crop::convertCropPaintToOriginal() {
-	const auto cropHolder = QMatrix()
+	const auto cropHolder = QTransform()
 		.scale(_ratio.w, _ratio.h)
 		.mapRect(QRectF(QPointF(), FlipSizeByRotation(_imageSize, _angle)));
 	const auto cropHolderCenter = cropHolder.center();
 
-	const auto matrix = QMatrix()
+	const auto matrix = QTransform()
 		.translate(cropHolderCenter.x(), cropHolderCenter.y())
 		.rotate(-_angle)
 		.scale((_flipped ? -1 : 1) * 1. / _ratio.w, 1. / _ratio.h)
@@ -205,8 +212,8 @@ void Crop::computeDownState(const QPoint &p) {
 	const auto edge = mouseState(p);
 	const auto &inner = _innerRect;
 	const auto &crop = _cropPaint;
-	const auto [iLeft, iTop, iRight, iBottom] = RectEdges(inner);
-	const auto [cLeft, cTop, cRight, cBottom] = RectEdges(crop);
+	const auto &[iLeft, iTop, iRight, iBottom] = RectEdges(inner);
+	const auto &[cLeft, cTop, cRight, cBottom] = RectEdges(crop);
 	_down = InfoAtDown{
 		.rect = crop,
 		.edge = edge,

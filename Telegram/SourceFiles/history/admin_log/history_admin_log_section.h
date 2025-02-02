@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/section_widget.h"
 #include "window/section_memento.h"
 #include "history/admin_log/history_admin_log_item.h"
+#include "history/admin_log/history_admin_log_filter_value.h"
 #include "mtproto/sender.h"
 
 namespace Ui {
@@ -27,21 +28,6 @@ namespace AdminLog {
 class FixedBar;
 class InnerWidget;
 class SectionMemento;
-
-struct FilterValue {
-	// Empty "flags" means all events.
-	MTPDchannelAdminLogEventsFilter::Flags flags = 0;
-	std::vector<not_null<UserData*>> admins;
-	bool allUsers = true;
-};
-
-inline bool operator==(const FilterValue &a, const FilterValue &b) {
-	return (a.flags == b.flags && a.admins == b.admins && a.allUsers == b.allUsers);
-}
-
-inline bool operator!=(const FilterValue &a, const FilterValue &b) {
-	return !(a == b);
-}
 
 class Widget final : public Window::SectionWidget {
 public:

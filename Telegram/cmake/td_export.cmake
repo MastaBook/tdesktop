@@ -5,7 +5,7 @@
 # https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 add_library(td_export OBJECT)
-init_target(td_export)
+init_non_host_target(td_export)
 add_library(tdesktop::td_export ALIAS td_export)
 
 target_precompile_headers(td_export PRIVATE ${src_loc}/export/export_pch.h)
@@ -26,6 +26,8 @@ PRIVATE
     export/output/export_output_file.h
     export/output/export_output_html.cpp
     export/output/export_output_html.h
+    export/output/export_output_html_and_json.cpp
+    export/output/export_output_html_and_json.h
     export/output/export_output_json.cpp
     export/output/export_output_json.h
     export/output/export_output_result.h

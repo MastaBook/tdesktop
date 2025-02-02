@@ -7,17 +7,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "payments/ui/payments_field.h"
 
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/boxes/country_select_box.h"
 #include "ui/text/format_values.h"
 #include "ui/ui_utility.h"
-#include "ui/special_fields.h"
+#include "ui/widgets/fields/special_fields.h"
 #include "countries/countries_instance.h"
 #include "base/platform/base_platform_info.h"
 #include "base/event_filter.h"
+#include "base/qt/qt_common_adapters.h"
 #include "styles/style_payments.h"
 
 #include <QtCore/QRegularExpression>
+#include <QtWidgets/QTextEdit>
 
 namespace Payments::Ui {
 namespace {
@@ -34,7 +36,8 @@ struct SimpleFieldState {
 }
 
 [[nodiscard]] QString RemoveNonNumbers(QString value) {
-	return value.replace(QRegularExpression("[^0-9]"), QString());
+	static const auto RegExp = QRegularExpression("[^0-9]");
+	return value.replace(RegExp, QString());
 }
 
 [[nodiscard]] SimpleFieldState CleanMoneyState(
@@ -49,11 +52,11 @@ struct SimpleFieldState {
 	);
 	const auto digitsLimit = 16 - rule.exponent;
 	const auto beforePosition = state.value.mid(0, state.position);
-	auto decimalPosition = withDecimal.lastIndexOf(rule.decimal);
+	auto decimalPosition = int(withDecimal.lastIndexOf(rule.decimal));
 	if (decimalPosition < 0) {
 		state = {
 			.value = RemoveNonNumbers(state.value),
-			.position = RemoveNonNumbers(beforePosition).size(),
+			.position = int(RemoveNonNumbers(beforePosition).size()),
 		};
 	} else {
 		const auto onlyNumbersBeforeDecimal = RemoveNonNumbers(
@@ -62,7 +65,7 @@ struct SimpleFieldState {
 			.value = (onlyNumbersBeforeDecimal
 				+ QChar(rule.decimal)
 				+ RemoveNonNumbers(state.value.mid(decimalPosition + 1))),
-			.position = (RemoveNonNumbers(beforePosition).size()
+			.position = int(RemoveNonNumbers(beforePosition).size()
 				+ (state.position > decimalPosition ? 1 : 0)),
 		};
 		decimalPosition = onlyNumbersBeforeDecimal.size();
@@ -133,19 +136,19 @@ struct SimpleFieldState {
 [[nodiscard]] bool IsBackspace(const FieldValidateRequest &request) {
 	return (request.wasAnchor == request.wasPosition)
 		&& (request.wasPosition == request.nowPosition + 1)
-		&& (request.wasValue.midRef(0, request.wasPosition - 1)
-			== request.nowValue.midRef(0, request.nowPosition))
-		&& (request.wasValue.midRef(request.wasPosition)
-			== request.nowValue.midRef(request.nowPosition));
+		&& (base::StringViewMid(request.wasValue, 0, request.wasPosition - 1)
+			== base::StringViewMid(request.nowValue, 0, request.nowPosition))
+		&& (base::StringViewMid(request.wasValue, request.wasPosition)
+			== base::StringViewMid(request.nowValue, request.nowPosition));
 }
 
 [[nodiscard]] bool IsDelete(const FieldValidateRequest &request) {
 	return (request.wasAnchor == request.wasPosition)
 		&& (request.wasPosition == request.nowPosition)
-		&& (request.wasValue.midRef(0, request.wasPosition)
-			== request.nowValue.midRef(0, request.nowPosition))
-		&& (request.wasValue.midRef(request.wasPosition + 1)
-			== request.nowValue.midRef(request.nowPosition));
+		&& (base::StringViewMid(request.wasValue, 0, request.wasPosition)
+			== base::StringViewMid(request.nowValue, 0, request.nowPosition))
+		&& (base::StringViewMid(request.wasValue, request.wasPosition + 1)
+			== base::StringViewMid(request.nowValue, request.nowPosition));
 }
 
 [[nodiscard]] auto MoneyValidator(const CurrencyRule &rule) {
@@ -217,6 +220,7 @@ struct SimpleFieldState {
 	if (config.type == FieldType::Country) {
 		return countryIso2;
 	} else if (config.type == FieldType::Money) {
+		static const auto RegExp = QRegularExpression("[^0-9\\.]");
 		const auto rule = LookupCurrencyRule(config.currency);
 		const auto real = QString(parsed).replace(
 			QChar(rule.decimal),
@@ -225,16 +229,15 @@ struct SimpleFieldState {
 			QChar(','),
 			QChar('.')
 		).replace(
-			QRegularExpression("[^0-9\\.]"),
+			RegExp,
 			QString()
 		).toDouble();
 		return QString::number(
-			int64(std::round(real * std::pow(10., rule.exponent))));
+			int64(base::SafeRound(real * std::pow(10., rule.exponent))));
 	} else if (config.type == FieldType::CardNumber
 		|| config.type == FieldType::CardCVC) {
-		return QString(parsed).replace(
-			QRegularExpression("[^0-9\\.]"),
-			QString());
+		static const auto RegExp = QRegularExpression("[^0-9]");
+		return QString(parsed).replace(RegExp, QString());
 	}
 	return parsed;
 }
@@ -302,7 +305,7 @@ struct SimpleFieldState {
 		.st = st::paymentsMoneyField,
 	});
 	const auto &rule = state->rule;
-	state->currencySkip = rule.space ? state->st.font->spacew : 0;
+	state->currencySkip = rule.space ? state->st.style.font->spacew : 0;
 	state->currencyText = ((!rule.left && rule.space)
 		? QString(QChar(' '))
 		: QString()) + (*rule.international
@@ -321,7 +324,7 @@ struct SimpleFieldState {
 		QString(),
 		st::paymentsFieldAdditional);
 	const auto leftSkip = state->left
-		? (state->left->naturalWidth() + state->currencySkip)
+		? (state->left->textMaxWidth() + state->currencySkip)
 		: 0;
 	const auto rightSkip = st::paymentsFieldAdditional.style.font->width(
 		QString(QChar(rule.decimal))
@@ -340,12 +343,12 @@ struct SimpleFieldState {
 	}
 	const auto updateRight = [=] {
 		const auto text = result->getLastText();
-		const auto width = state->st.font->width(text);
+		const auto width = state->st.style.font->width(text);
 		const auto &rule = state->rule;
 		const auto symbol = QChar(rule.decimal);
 		const auto decimal = text.indexOf(symbol);
 		const auto zeros = (decimal >= 0)
-			? std::max(rule.exponent - (text.size() - decimal - 1), 0)
+			? std::max(rule.exponent - int(text.size() - decimal - 1), 0)
 			: rule.stripDotZero
 			? 0
 			: rule.exponent;
@@ -406,7 +409,8 @@ struct SimpleFieldState {
 			st::paymentsField,
 			std::move(config.placeholder),
 			Countries::ExtractPhoneCode(config.defaultPhone),
-			Parse(config));
+			Parse(config),
+			[](const QString &s) { return Countries::Groups(s); });
 	case FieldType::Money:
 		return CreateMoneyField(
 			wrap,
@@ -608,7 +612,8 @@ void Field::setupValidator(Fn<ValidateResult(ValidateRequest)> validator) {
 	} else {
 		const auto raw = _input->rawTextEdit();
 		QObject::connect(raw, &QTextEdit::cursorPositionChanged, save);
-		QObject::connect(_input, &InputField::changed, validate);
+		_input->changes(
+		) | rpl::start_with_next(validate, _input->lifetime());
 	}
 }
 
@@ -646,7 +651,8 @@ void Field::setupSubmit() {
 	if (_masked) {
 		QObject::connect(_masked, &MaskedInputField::submitted, submitted);
 	} else {
-		QObject::connect(_input, &InputField::submitted, submitted);
+		_input->submits(
+		) | rpl::start_with_next(submitted, _input->lifetime());
 	}
 }
 

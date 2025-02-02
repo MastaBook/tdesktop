@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "stripe/stripe_card_validator.h"
 
+#include "base/qt/qt_string_view.h"
+
 #include <QtCore/QDate>
 #include <QtCore/QRegularExpression>
 
@@ -75,24 +77,26 @@ struct BinRange {
 		const BinRange &range,
 		const QString &sanitized) {
 	const auto minWithLow = std::min(sanitized.size(), range.low.size());
-	if (sanitized.midRef(0, minWithLow).toInt()
-		< range.low.midRef(0, minWithLow).toInt()) {
+	if (base::StringViewMid(sanitized, 0, minWithLow).toInt()
+		< base::StringViewMid(range.low, 0, minWithLow).toInt()) {
 		return false;
 	}
 	const auto minWithHigh = std::min(sanitized.size(), range.high.size());
-	if (sanitized.midRef(0, minWithHigh).toInt()
-		> range.high.midRef(0, minWithHigh).toInt()) {
+	if (base::StringViewMid(sanitized, 0, minWithHigh).toInt()
+		> base::StringViewMid(range.high, 0, minWithHigh).toInt()) {
 		return false;
 	}
 	return true;
 }
 
 [[nodiscard]] bool IsNumeric(const QString &value) {
-	return QRegularExpression("^[0-9]*$").match(value).hasMatch();
+	static const auto RegExp = QRegularExpression("^[0-9]*$");
+	return RegExp.match(value).hasMatch();
 }
 
 [[nodiscard]] QString RemoveWhitespaces(QString value) {
-	return value.replace(QRegularExpression("\\s"), QString());
+	static const auto RegExp = QRegularExpression("\\s");
+	return value.replace(RegExp, QString());
 }
 
 [[nodiscard]] std::vector<BinRange> BinRangesForNumber(
@@ -191,12 +195,28 @@ CardValidationResult ValidateCard(const QString &number) {
 	}
 	const auto range = MostSpecificBinRangeForNumber(sanitized);
 	const auto brand = range.brand;
-	if (sanitized.size() > range.length) {
+
+	static const auto &all = AllRanges();
+	static const auto compare = [](const BinRange &a, const BinRange &b) {
+		return a.length < b.length;
+	};
+	static const auto kMinLength = std::min_element(
+		begin(all),
+		end(all),
+		compare)->length;
+	static const auto kMaxLength = std::max_element(
+		begin(all),
+		end(all),
+		compare)->length;
+
+	if (sanitized.size() > kMaxLength) {
 		return { .state = ValidationState::Invalid, .brand = brand };
-	} else if (sanitized.size() < range.length) {
+	} else if (sanitized.size() < kMinLength) {
 		return { .state = ValidationState::Incomplete, .brand = brand };
 	} else if (!IsValidLuhn(sanitized)) {
 		return { .state = ValidationState::Invalid, .brand = brand };
+	} else if (sanitized.size() < kMaxLength) {
+		return { .state = ValidationState::Valid, .brand = brand };
 	}
 	return {
 		.state = ValidationState::Valid,
@@ -205,7 +225,9 @@ CardValidationResult ValidateCard(const QString &number) {
 	};
 }
 
-ExpireDateValidationResult ValidateExpireDate(const QString &date) {
+ExpireDateValidationResult ValidateExpireDate(
+		const QString &date,
+		const std::optional<QDate> &overrideExpireDateThreshold) {
 	const auto sanitized = RemoveWhitespaces(date).replace('/', QString());
 	if (!IsNumeric(sanitized)) {
 		return { ValidationState::Invalid };
@@ -213,7 +235,7 @@ ExpireDateValidationResult ValidateExpireDate(const QString &date) {
 		return { ValidationState::Incomplete };
 	}
 	const auto normalized = (sanitized[0] > '1' ? "0" : "") + sanitized;
-	const auto month = normalized.mid(0, 2).toInt();
+	const auto month = base::StringViewMid(normalized, 0, 2).toInt();
 	if (month < 1 || month > 12) {
 		return { ValidationState::Invalid };
 	} else if (normalized.size() < 4) {
@@ -221,14 +243,15 @@ ExpireDateValidationResult ValidateExpireDate(const QString &date) {
 	} else if (normalized.size() > 4) {
 		return { ValidationState::Invalid };
 	}
-	const auto year = 2000 + normalized.mid(2).toInt();
+	const auto year = 2000 + base::StringViewMid(normalized, 2).toInt();
 
-	const auto currentDate = QDate::currentDate();
-	const auto currentMonth = currentDate.month();
-	const auto currentYear = currentDate.year();
-	if (year < currentYear) {
+	const auto thresholdDate = overrideExpireDateThreshold.value_or(
+		QDate::currentDate());
+	const auto thresholdMonth = thresholdDate.month();
+	const auto thresholdYear = thresholdDate.year();
+	if (year < thresholdYear) {
 		return { ValidationState::Invalid };
-	} else if (year == currentYear && month < currentMonth) {
+	} else if (year == thresholdYear && month < thresholdMonth) {
 		return { ValidationState::Invalid };
 	}
 	return { ValidationState::Valid, true };
@@ -236,15 +259,16 @@ ExpireDateValidationResult ValidateExpireDate(const QString &date) {
 
 ValidationState ValidateParsedExpireDate(
 		quint32 month,
-		quint32 year) {
+		quint32 year,
+		const std::optional<QDate> &overrideExpireDateThreshold) {
 	if ((year / 100) != 20) {
 		return ValidationState::Invalid;
 	}
-	return ValidateExpireDate(
-		QString("%1%2"
-		).arg(month, 2, 10, QChar('0')
-		).arg(year % 100, 2, 10, QChar('0'))
-	).state;
+	const auto date = QString("%1%2"
+	).arg(month, 2, 10, QChar('0')
+	).arg(year % 100, 2, 10, QChar('0'));
+
+	return ValidateExpireDate(date, overrideExpireDateThreshold).state;
 }
 
 CvcValidationResult ValidateCvc(

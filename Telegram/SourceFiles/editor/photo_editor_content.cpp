@@ -48,8 +48,8 @@ PhotoEditorContent::PhotoEditorContent(
 			return;
 		}
 		const auto imageSizeF = [&] {
-			const auto rotatedSize =
-				FlipSizeByRotation(size, mods.angle);
+			const auto rotatedSize
+				= FlipSizeByRotation(size, mods.angle);
 			const auto m = _crop->cropMargins();
 			const auto sizeForCrop = rotatedSize
 				- QSize(m.left() + m.right(), m.top() + m.bottom());
@@ -80,19 +80,17 @@ PhotoEditorContent::PhotoEditorContent(
 			mods.angle,
 			mods.flipped, imageSizeF);
 		_paint->applyTransform(geometry, mods.angle, mods.flipped);
+
+		_innerRect = geometry;
 	}, lifetime());
 
 	paintRequest(
 	) | rpl::start_with_next([=](const QRect &clip) {
-		Painter p(this);
+		auto p = QPainter(this);
 
 		p.fillRect(clip, Qt::transparent);
-
 		p.setTransform(_imageMatrix);
-
-		p.drawPixmap(
-			_imageRect,
-			_photo->pix(_imageRect.width(), _imageRect.height()));
+		p.drawPixmap(_imageRect, _photo->pix(_imageRect.size()));
 	}, lifetime());
 
 	setupDragArea();

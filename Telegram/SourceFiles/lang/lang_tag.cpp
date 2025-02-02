@@ -7,8 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "lang/lang_tag.h"
 
+#include "core/stars_amount.h"
 #include "lang/lang_keys.h"
 #include "ui/text/text.h"
+#include "base/qt/qt_common_adapters.h"
+#include "base/qt/qt_string_view.h"
+
+#include <QtCore/QLocale>
 
 namespace Lang {
 namespace {
@@ -867,20 +872,17 @@ auto ChoosePlural = ChoosePluralDefault;
 
 int FindTagReplacementPosition(const QString &original, ushort tag) {
 	for (auto s = original.constData(), ch = s, e = ch + original.size(); ch != e;) {
-		if (*ch == TextCommand) {
-			if (ch + kTagReplacementSize <= e && (ch + 1)->unicode() == TextCommandLangTag && *(ch + 3) == TextCommand) {
+		if (ch->unicode() == kTextCommand) {
+			if (ch + kTagReplacementSize <= e
+				&& (ch + 1)->unicode() == kTextCommandLangTag
+				&& (ch + 3)->unicode() == kTextCommand) {
 				if ((ch + 2)->unicode() == 0x0020 + tag) {
 					return ch - s;
 				} else {
 					ch += kTagReplacementSize;
 				}
 			} else {
-				auto next = textSkipCommand(ch, e);
-				if (next == ch) {
-					++ch;
-				} else {
-					ch = next;
-				}
+				++ch;
 			}
 		} else {
 			++ch;
@@ -911,7 +913,7 @@ int NonZeroPartToInt(QString value) {
 		}
 	}
 	return (zeros > 0)
-		? (zeros < value.size() ? value.midRef(zeros).toInt() : 0)
+		? (zeros < value.size() ? base::StringViewMid(value, zeros).toInt() : 0)
 		: (value.isEmpty() ? 0 : value.toInt());
 }
 
@@ -930,6 +932,7 @@ ShortenedCount FormatCountToShort(int64 number) {
 		// Update given number.
 		// E.g. 12345 will be 12000.
 		result.number = rounded * divider;
+		result.shortened = true;
 	};
 	if (abs >= 1'000'000) {
 		shorten(1'000'000, 'M');
@@ -939,6 +942,30 @@ ShortenedCount FormatCountToShort(int64 number) {
 		result.string = QString::number(number);
 	}
 	return result;
+}
+
+QString FormatCountDecimal(int64 number) {
+	return QLocale().toString(number);
+}
+
+QString FormatExactCountDecimal(float64 number) {
+	return QLocale().toString(number, 'f', QLocale::FloatingPointShortest);
+}
+
+ShortenedCount FormatStarsAmountToShort(StarsAmount amount) {
+	const auto attempt = FormatCountToShort(amount.whole());
+	return attempt.shortened ? attempt : ShortenedCount{
+		.string = FormatStarsAmountDecimal(amount),
+	};
+}
+
+QString FormatStarsAmountDecimal(StarsAmount amount) {
+	return FormatExactCountDecimal(amount.value());
+}
+
+QString FormatStarsAmountRounded(StarsAmount amount) {
+	const auto value = amount.value();
+	return FormatExactCountDecimal(base::SafeRound(value * 100.) / 100.);
 }
 
 PluralResult Plural(
@@ -977,7 +1004,7 @@ PluralResult Plural(
 		if (type == lt_count_short) {
 			return { shift, shortened.string };
 		} else if (type == lt_count_decimal) {
-			return { shift, QString("%L1").arg(round) };
+			return { shift, FormatCountDecimal(round) };
 		}
 		return { shift, QString::number(round) };
 	}
@@ -1008,11 +1035,11 @@ QString ReplaceTag<QString>::Replace(QString &&original, const QString &replacem
 	auto result = QString();
 	result.reserve(original.size() + replacement.size() - kTagReplacementSize);
 	if (replacementPosition > 0) {
-		result.append(original.midRef(0, replacementPosition));
+		result.append(base::StringViewMid(original, 0, replacementPosition));
 	}
 	result.append(replacement);
 	if (replacementPosition + kTagReplacementSize < original.size()) {
-		result.append(original.midRef(replacementPosition + kTagReplacementSize));
+		result.append(base::StringViewMid(original, replacementPosition + kTagReplacementSize));
 	}
 	return result;
 }

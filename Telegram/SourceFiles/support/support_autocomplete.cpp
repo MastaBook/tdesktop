@@ -10,19 +10,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_theme.h"
 #include "ui/chat/chat_style.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/buttons.h"
 #include "ui/wrap/padding_wrap.h"
+#include "ui/painter.h"
 #include "support/support_templates.h"
 #include "support/support_common.h"
 #include "history/view/history_view_message.h"
 #include "history/view/history_view_service_message.h"
-#include "history/history_message.h"
+#include "history/history_item.h"
 #include "lang/lang_keys.h"
-#include "data/data_session.h"
 #include "base/unixtime.h"
 #include "base/call_delayed.h"
-#include "base/qt_adapters.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "apiwrap.h"
@@ -130,7 +129,7 @@ void Inner::prepareRow(Row &row) {
 	row.question.setText(st::autocompleteRowTitle, row.data.question);
 	row.keys.setText(
 		st::autocompleteRowKeys,
-		row.data.originalKeys.join(qstr(", ")));
+		row.data.originalKeys.join(u", "_q));
 	row.answer.setText(st::autocompleteRowAnswer, row.data.value);
 }
 
@@ -274,25 +273,14 @@ AdminLog::OwnedItem GenerateCommentItem(
 	if (data.comment.isEmpty()) {
 		return nullptr;
 	}
-	const auto id = ServerMaxMsgId + (ServerMaxMsgId / 2);
-	const auto flags = MessageFlag::HasFromId
-		| MessageFlag::Outgoing
-		| MessageFlag::FakeHistoryItem;
-	const auto replyTo = MsgId();
-	const auto viaBotId = UserId();
-	const auto groupedId = uint64();
-	const auto item = history->makeMessage(
-		id,
-		flags,
-		replyTo,
-		viaBotId,
-		base::unixtime::now(),
-		history->session().userId(),
-		QString(),
-		TextWithEntities{ TextUtilities::Clean(data.comment) },
-		MTP_messageMediaEmpty(),
-		MTPReplyMarkup(),
-		groupedId);
+	const auto item = history->makeMessage({
+		.id = history->nextNonHistoryEntryId(),
+		.flags = (MessageFlag::HasFromId
+			| MessageFlag::Outgoing
+			| MessageFlag::FakeHistoryItem),
+		.from = history->session().userPeerId(),
+		.date = base::unixtime::now(),
+	}, TextWithEntities{ data.comment }, MTP_messageMediaEmpty());
 	return AdminLog::OwnedItem(delegate, item);
 }
 
@@ -300,29 +288,19 @@ AdminLog::OwnedItem GenerateContactItem(
 		not_null<HistoryView::ElementDelegate*> delegate,
 		not_null<History*> history,
 		const Contact &data) {
-	const auto replyTo = MsgId();
-	const auto viaBotId = UserId();
-	const auto postAuthor = QString();
-	const auto groupedId = uint64();
-	const auto item = history->makeMessage(
-		(ServerMaxMsgId + (ServerMaxMsgId / 2) + 1),
-		(MessageFlag::HasFromId
+	const auto item = history->makeMessage({
+		.id = history->nextNonHistoryEntryId(),
+		.flags = (MessageFlag::HasFromId
 			| MessageFlag::Outgoing
 			| MessageFlag::FakeHistoryItem),
-		replyTo,
-		viaBotId,
-		base::unixtime::now(),
-		history->session().userPeerId(),
-		postAuthor,
-		TextWithEntities(),
-		MTP_messageMediaContact(
-			MTP_string(data.phone),
-			MTP_string(data.firstName),
-			MTP_string(data.lastName),
-			MTP_string(), // vcard
-			MTP_long(0)), // user_id
-		MTPReplyMarkup(),
-		groupedId);
+		.from = history->session().userPeerId(),
+		.date = base::unixtime::now(),
+	}, TextWithEntities(), MTP_messageMediaContact(
+		MTP_string(data.phone),
+		MTP_string(data.firstName),
+		MTP_string(data.lastName),
+		MTP_string(), // vcard
+		MTP_long(0))); // user_id
 	return AdminLog::OwnedItem(delegate, item);
 }
 
@@ -399,8 +377,8 @@ void Autocomplete::setupContent() {
 		this,
 		object_ptr<Ui::InputField>(
 			this,
-			st::gifsSearchField,
-			rpl::single(qsl("Search for templates"))), // #TODO hard_lang
+			st::defaultMultiSelectSearchField,
+			rpl::single(u"Search for templates"_q)), // #TODO hard_lang
 		st::autocompleteSearchPadding);
 	const auto input = inputWrap->entity();
 	const auto scroll = Ui::CreateChild<Ui::ScrollArea>(this);
@@ -420,16 +398,20 @@ void Autocomplete::setupContent() {
 	};
 
 	inner->activated() | rpl::start_with_next(submit, lifetime());
-	connect(input, &Ui::InputField::blurred, [=] {
+	input->focusedChanges(
+	) | rpl::filter(!rpl::mappers::_1) | rpl::start_with_next([=] {
 		base::call_delayed(10, this, [=] {
 			if (!input->hasFocus()) {
 				deactivate();
 			}
 		});
-	});
-	connect(input, &Ui::InputField::cancelled, [=] { deactivate(); });
-	connect(input, &Ui::InputField::changed, refresh);
-	connect(input, &Ui::InputField::submitted, submit);
+	}, input->lifetime());
+	input->cancelled(
+	) | rpl::start_with_next([=] {
+		deactivate();
+	}, input->lifetime());
+	input->changes() | rpl::start_with_next(refresh, input->lifetime());
+	input->submits() | rpl::start_with_next(submit, input->lifetime());
 	input->customUpDown(true);
 
 	_activate = [=] {
@@ -472,14 +454,14 @@ void Autocomplete::setupContent() {
 }
 
 void Autocomplete::submitValue(const QString &value) {
-	const auto prefix = qstr("contact:");
+	const auto prefix = u"contact:"_q;
 	if (value.startsWith(prefix)) {
 		const auto line = value.indexOf('\n');
 		const auto text = (line > 0) ? value.mid(line + 1) : QString();
 		const auto contact = value.mid(
 			prefix.size(),
 			(line > 0) ? (line - prefix.size()) : -1);
-		const auto parts = contact.split(' ', base::QStringSkipEmptyParts);
+		const auto parts = contact.split(' ', Qt::SkipEmptyParts);
 		if (parts.size() > 1) {
 			const auto phone = parts[0];
 			const auto firstName = parts[1];
@@ -504,7 +486,8 @@ ConfirmContactBox::ConfirmContactBox(
 	const Contact &data,
 	Fn<void(Qt::KeyboardModifiers)> submit)
 : SimpleElementDelegate(controller, [=] { update(); })
-, _chatStyle(std::make_unique<Ui::ChatStyle>())
+, _chatStyle(std::make_unique<Ui::ChatStyle>(
+	history->session().colorIndicesValue()))
 , _comment(GenerateCommentItem(this, history, data))
 , _contact(GenerateContactItem(this, history, data))
 , _submit(submit) {
@@ -512,12 +495,12 @@ ConfirmContactBox::ConfirmContactBox(
 }
 
 void ConfirmContactBox::prepare() {
-	setTitle(rpl::single(qsl("Confirmation"))); // #TODO hard_lang
+	setTitle(rpl::single(u"Confirmation"_q)); // #TODO hard_lang
 
 	auto maxWidth = 0;
 	if (_comment) {
-		_comment->setAttachToNext(true);
-		_contact->setAttachToPrevious(true);
+		_comment->setAttachToNext(true, _contact.get());
+		_contact->setAttachToPrevious(true, _comment.get());
 		_comment->initDimensions();
 		accumulate_max(maxWidth, _comment->maxWidth());
 	}
@@ -573,7 +556,8 @@ void ConfirmContactBox::paintEvent(QPaintEvent *e) {
 	auto context = theme->preparePaintContext(
 		_chatStyle.get(),
 		rect(),
-		rect());
+		rect(),
+		controller()->isGifPausedAtLeastFor(Window::GifPauseReason::Layer));
 	p.translate(st::boxPadding.left(), 0);
 	if (_comment) {
 		context.outbg = _comment->hasOutLayout();

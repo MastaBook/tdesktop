@@ -7,9 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_groups.h"
 
+#include "history/history.h"
 #include "history/history_item.h"
+#include "dialogs/ui/dialogs_message_view.h"
 #include "data/data_media_types.h"
 #include "data/data_session.h"
+#include "data/data_forum.h"
+#include "data/data_forum_topic.h"
 
 namespace Data {
 namespace {
@@ -27,6 +31,14 @@ bool Groups::isGrouped(not_null<const HistoryItem*> item) const {
 	}
 	const auto media = item->media();
 	return media && media->canBeGrouped();
+}
+
+bool Groups::isGroupOfOne(not_null<const HistoryItem*> item) const {
+	if (const auto groupId = item->groupId()) {
+		const auto i = _groups.find(groupId);
+		return (i != _groups.end()) && (i->second.items.size() == 1);
+	}
+	return false;
 }
 
 void Groups::registerMessage(not_null<HistoryItem*> item) {
@@ -69,9 +81,10 @@ void Groups::refreshMessage(
 		bool justRefreshViews) {
 	if (!isGrouped(item)) {
 		unregisterMessage(item);
+		_data->requestItemViewRefresh(item);
 		return;
 	}
-	if (!IsServerMsgId(item->id) && !item->isScheduled()) {
+	if (!item->isRegular() && !item->isScheduled()) {
 		return;
 	}
 	const auto groupId = item->groupId();
@@ -110,14 +123,10 @@ void Groups::refreshMessage(
 HistoryItemsList::const_iterator Groups::findPositionForItem(
 		const HistoryItemsList &group,
 		not_null<HistoryItem*> item) {
-	const auto itemId = item->id;
 	const auto last = end(group);
-	if (!IsServerMsgId(itemId)) {
-		return last;
-	}
+	const auto itemId = item->id;
 	for (auto result = begin(group); result != last; ++result) {
-		const auto alreadyId = (*result)->id;
-		if (IsServerMsgId(alreadyId) && alreadyId > itemId) {
+		if ((*result)->id > itemId) {
 			return result;
 		}
 	}
@@ -140,8 +149,12 @@ const Group *Groups::find(not_null<const HistoryItem*> item) const {
 }
 
 void Groups::refreshViews(const HistoryItemsList &items) {
+	if (items.empty()) {
+		return;
+	}
 	for (const auto &item : items) {
 		_data->requestItemViewRefresh(item);
+		item->invalidateChatListEntry();
 	}
 }
 

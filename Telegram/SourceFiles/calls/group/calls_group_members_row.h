@@ -19,6 +19,7 @@ struct GroupCallParticipant;
 
 namespace Ui {
 class RippleAnimation;
+struct PeerUserpicView;
 } // namespace Ui
 
 namespace Calls::Group {
@@ -47,11 +48,11 @@ public:
 	virtual void rowScheduleRaisedHandStatusRemove(
 		not_null<MembersRow*> row) = 0;
 	virtual void rowPaintIcon(
-		Painter &p,
+		QPainter &p,
 		QRect rect,
 		const IconState &state) = 0;
 	virtual int rowPaintStatusIcon(
-		Painter &p,
+		QPainter &p,
 		int x,
 		int y,
 		int outerWidth,
@@ -104,15 +105,16 @@ public:
 		return _raisedHandRating;
 	}
 
-	void addActionRipple(QPoint point, Fn<void()> updateCallback) override;
-	void stopLastActionRipple() override;
-
 	void refreshName(const style::PeerListItem &st) override;
 
-	QSize actionSize() const override;
-	bool actionDisabled() const override;
-	QMargins actionMargins() const override;
-	void paintAction(
+	void rightActionAddRipple(
+		QPoint point,
+		Fn<void()> updateCallback) override;
+	void rightActionStopLastRipple() override;
+	QSize rightActionSize() const override;
+	bool rightActionDisabled() const override;
+	QMargins rightActionMargins() const override;
+	void rightActionPaint(
 		Painter &p,
 		int x,
 		int y,
@@ -120,7 +122,8 @@ public:
 		bool selected,
 		bool actionSelected) override;
 
-	PaintRoundImageCallback generatePaintUserpicCallback() override;
+	PaintRoundImageCallback generatePaintUserpicCallback(
+		bool forceRound) override;
 	void paintComplexUserpic(
 		Painter &p,
 		int x,
@@ -149,7 +152,7 @@ public:
 		bool selected,
 		MembersRowStyle style);
 	void paintMuteIcon(
-		Painter &p,
+		QPainter &p,
 		QRect iconRect,
 		MembersRowStyle style = MembersRowStyle::Default);
 	[[nodiscard]] MembersRowDelegate::IconState computeIconState(
@@ -179,7 +182,7 @@ private:
 	void setVolume(int volume);
 
 	void ensureUserpicCache(
-		std::shared_ptr<Data::CloudImageView> &view,
+		Ui::PeerUserpicView &view,
 		int size);
 	void paintBlobs(
 		Painter &p,
@@ -189,7 +192,7 @@ private:
 		int sizeh, PanelMode mode);
 	void paintScaledUserpic(
 		Painter &p,
-		std::shared_ptr<Data::CloudImageView> &userpic,
+		Ui::PeerUserpicView &userpic,
 		int x,
 		int y,
 		int outerWidth,
@@ -205,15 +208,15 @@ private:
 	Ui::Animations::Simple _speakingAnimation; // For gray-red/green icon.
 	Ui::Animations::Simple _mutedAnimation; // For gray/red icon.
 	Ui::Animations::Simple _activeAnimation; // For icon cross animation.
-	QString _aboutText;
+	Ui::Text::String _about;
 	crl::time _speakingLastTime = 0;
 	uint64 _raisedHandRating = 0;
 	int _volume = Group::kDefaultVolume;
-	bool _sounding : 1;
-	bool _speaking : 1;
-	bool _raisedHandStatus : 1;
-	bool _skipLevelUpdate : 1;
-	bool _mutedByMe : 1;
+	bool _sounding : 1 = false;
+	bool _speaking : 1 = false;
+	bool _raisedHandStatus : 1 = false;
+	bool _skipLevelUpdate : 1 = false;
+	bool _mutedByMe : 1 = false;
 
 };
 

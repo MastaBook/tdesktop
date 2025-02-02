@@ -7,10 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
-#include "ui/rect_part.h"
-#include "ui/effects/animations.h"
 #include "base/object_ptr.h"
+#include "ui/effects/animations.h"
+#include "ui/rect_part.h"
+#include "ui/rp_widget.h"
 
 namespace Window {
 class SessionController;
@@ -32,7 +32,22 @@ class Instance;
 namespace Media {
 namespace Player {
 
-class Float : public Ui::RpWidget, private base::Subscriber {
+class RoundPainter {
+public:
+	RoundPainter(not_null<HistoryItem*> item);
+
+	bool fillFrame(const QSize &size);
+	const QImage &frame() const;
+
+private:
+	const not_null<HistoryItem*> _item;
+
+	QImage _roundingMask;
+	QImage _frame;
+
+};
+
+class Float final : public Ui::RpWidget {
 public:
 	Float(
 		QWidget *parent,
@@ -84,7 +99,6 @@ private:
 	void repaintItem();
 	void prepareShadow();
 	bool hasFrame() const;
-	bool fillFrame();
 	[[nodiscard]] QRect getInnerRect() const;
 	void finishDrag(bool closed);
 	void pauseResume();
@@ -92,10 +106,11 @@ private:
 	HistoryItem *_item = nullptr;
 	Fn<void(bool visible)> _toggleCallback;
 
+	std::unique_ptr<RoundPainter> _roundPainter;
+
 	float64 _opacity = 1.;
 
 	QPixmap _shadow;
-	QImage _frame;
 	bool _down = false;
 	QPoint _downPoint;
 
@@ -115,6 +130,7 @@ public:
 class FloatDelegate {
 public:
 	virtual not_null<Ui::RpWidget*> floatPlayerWidget() = 0;
+	virtual void floatPlayerToggleGifsPaused(bool paused) = 0;
 	virtual not_null<FloatSectionDelegate*> floatPlayerGetSection(
 		Window::Column column) = 0;
 	virtual void floatPlayerEnumerateSections(Fn<void(
@@ -194,12 +210,13 @@ private:
 
 };
 
-class FloatController : private base::Subscriber {
+class FloatController final {
 public:
 	explicit FloatController(not_null<FloatDelegate*> delegate);
 
 	void replaceDelegate(not_null<FloatDelegate*> delegate);
-	rpl::producer<FullMsgId> closeEvents() const {
+
+	[[nodiscard]] rpl::producer<FullMsgId> closeEvents() const {
 		return _closeEvents.events();
 	}
 
@@ -261,6 +278,8 @@ private:
 
 	rpl::event_stream<FullMsgId> _closeEvents;
 	rpl::lifetime _delegateLifetime;
+
+	rpl::lifetime _lifetime;
 
 };
 

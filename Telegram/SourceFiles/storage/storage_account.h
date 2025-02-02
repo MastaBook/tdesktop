@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/cache/storage_cache_database.h"
 #include "data/stickers/data_stickers_set.h"
 #include "data/data_drafts.h"
+#include "webview/webview_common.h"
 
 class History;
 
@@ -51,9 +52,9 @@ using FileKey = quint64;
 enum class StartResult : uchar;
 
 struct MessageDraft {
-	MsgId msgId = 0;
+	FullReplyTo reply;
 	TextWithTags textWithTags;
-	Data::PreviewState previewState = Data::PreviewState::Allowed;
+	Data::WebPageDraft webpage;
 };
 
 struct MessageDraftSource {
@@ -75,6 +76,7 @@ public:
 	}
 
 	[[nodiscard]] QString tempDirectory() const;
+	[[nodiscard]] QString supportModePath() const;
 
 	[[nodiscard]] MTP::AuthKeyPtr peekLegacyLocalKey() const {
 		return _localKey;
@@ -97,9 +99,14 @@ public:
 	[[nodiscard]] bool hasDraftCursors(PeerId peerId);
 	[[nodiscard]] bool hasDraft(PeerId peerId);
 
-	void writeFileLocation(MediaKey location, const Core::FileLocation &local);
+	void writeFileLocation(
+		MediaKey location,
+		const Core::FileLocation &local);
 	[[nodiscard]] Core::FileLocation readFileLocation(MediaKey location);
 	void removeFileLocation(MediaKey location);
+
+	void updateDownloads(Fn<std::optional<QByteArray>()> downloadsSerialize);
+	[[nodiscard]] QByteArray downloadsSerialized() const;
 
 	[[nodiscard]] EncryptionKey cacheKey() const;
 	[[nodiscard]] QString cachePath() const;
@@ -130,6 +137,10 @@ public:
 	void writeRecentMasks();
 	void readInstalledMasks();
 	void readRecentMasks();
+	void writeInstalledCustomEmoji();
+	void writeFeaturedCustomEmoji();
+	void readInstalledCustomEmoji();
+	void readFeaturedCustomEmoji();
 
 	void writeRecentHashtagsAndBots();
 	void readRecentHashtagsAndBots();
@@ -138,6 +149,11 @@ public:
 
 	void writeExportSettings(const Export::Settings &settings);
 	[[nodiscard]] Export::Settings readExportSettings();
+
+	void writeSearchSuggestionsDelayed();
+	void writeSearchSuggestionsIfNeeded();
+	void writeSearchSuggestions();
+	void readSearchSuggestions();
 
 	void writeSelf();
 
@@ -152,6 +168,18 @@ public:
 	[[nodiscard]] bool isBotTrustedOpenGame(PeerId botId);
 	void markBotTrustedPayment(PeerId botId);
 	[[nodiscard]] bool isBotTrustedPayment(PeerId botId);
+	void markBotTrustedOpenWebView(PeerId botId);
+	[[nodiscard]] bool isBotTrustedOpenWebView(PeerId botId);
+
+	void enforceModernStorageIdBots();
+	[[nodiscard]] Webview::StorageId resolveStorageIdBots();
+	[[nodiscard]] Webview::StorageId resolveStorageIdOther();
+
+	[[nodiscard]] QImage readRoundPlaceholder();
+	void writeRoundPlaceholder(const QImage &placeholder);
+
+	[[nodiscard]] QByteArray readInlineBotsDownloads();
+	void writeInlineBotsDownloads(const QByteArray &bytes);
 
 	[[nodiscard]] bool encrypt(
 		const void *src,
@@ -173,8 +201,9 @@ private:
 		Failed,
 	};
 	enum class BotTrustFlag : uchar {
-		NoOpenGame = (1 << 0),
-		Payment    = (1 << 1),
+		NoOpenGame        = (1 << 0),
+		Payment           = (1 << 1),
+		OpenWebView       = (1 << 2),
 	};
 	friend inline constexpr bool is_flag_type(BotTrustFlag) { return true; };
 
@@ -256,6 +285,9 @@ private:
 	QMap<QString, QPair<MediaKey, Core::FileLocation>> _fileLocationPairs;
 	QMap<MediaKey, MediaKey> _fileLocationAliases;
 
+	QByteArray _downloadsSerialized;
+	Fn<std::optional<QByteArray>()> _downloadsSerialize;
+
 	FileKey _locationsKey = 0;
 	FileKey _trustedBotsKey = 0;
 	FileKey _installedStickersKey = 0;
@@ -273,6 +305,12 @@ private:
 	FileKey _exportSettingsKey = 0;
 	FileKey _installedMasksKey = 0;
 	FileKey _recentMasksKey = 0;
+	FileKey _installedCustomEmojiKey = 0;
+	FileKey _featuredCustomEmojiKey = 0;
+	FileKey _archivedCustomEmojiKey = 0;
+	FileKey _searchSuggestionsKey = 0;
+	FileKey _roundPlaceholderKey = 0;
+	FileKey _inlineBotsDownloadsKey = 0;
 
 	qint64 _cacheTotalSizeLimit = 0;
 	qint64 _cacheBigFileTotalSizeLimit = 0;
@@ -283,14 +321,24 @@ private:
 	bool _trustedBotsRead = false;
 	bool _readingUserSettings = false;
 	bool _recentHashtagsAndBotsWereRead = false;
+	bool _searchSuggestionsRead = false;
+	bool _inlineBotsDownloadsRead = false;
+
+	Webview::StorageId _webviewStorageIdBots;
+	Webview::StorageId _webviewStorageIdOther;
 
 	int _oldMapVersion = 0;
 
 	base::Timer _writeMapTimer;
 	base::Timer _writeLocationsTimer;
+	base::Timer _writeSearchSuggestionsTimer;
 	bool _mapChanged = false;
 	bool _locationsChanged = false;
 
+	QImage _roundPlaceholder;
+
 };
+
+[[nodiscard]] Webview::StorageId TonSiteStorageId();
 
 } // namespace Storage

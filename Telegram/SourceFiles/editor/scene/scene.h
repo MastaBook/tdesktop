@@ -39,8 +39,6 @@ public:
 	[[nodiscard]] rpl::producer<> addsItem() const;
 	[[nodiscard]] rpl::producer<> removesItem() const;
 
-	[[nodiscard]] std::vector<MTPInputDocument> attachedStickers() const;
-
 	[[nodiscard]] std::shared_ptr<float64> lastZ() const;
 
 	void updateZoom(float64 zoom);

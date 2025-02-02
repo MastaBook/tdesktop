@@ -16,7 +16,7 @@ class Session;
 } // namespace Main
 
 struct PollAnswer {
-	QString text;
+	TextWithEntities text;
 	QByteArray option;
 	int votes = 0;
 	bool chosen = false;
@@ -50,7 +50,7 @@ struct PollData {
 	bool closeByTimer();
 	bool applyChanges(const MTPDpoll &poll);
 	bool applyResults(const MTPPollResults &results);
-	void checkResultsReload(not_null<HistoryItem*> item, crl::time now);
+	[[nodiscard]] bool checkResultsReload(crl::time now);
 
 	[[nodiscard]] PollAnswer *answerByOption(const QByteArray &option);
 	[[nodiscard]] const PollAnswer *answerByOption(
@@ -65,9 +65,9 @@ struct PollData {
 	[[nodiscard]] bool quiz() const;
 
 	PollId id = 0;
-	QString question;
+	TextWithEntities question;
 	std::vector<PollAnswer> answers;
-	std::vector<not_null<UserData*>> recentVoters;
+	std::vector<not_null<PeerData*>> recentVoters;
 	std::vector<QByteArray> sendingVotes;
 	TextWithEntities solution;
 	TimeId closePeriod = 0;

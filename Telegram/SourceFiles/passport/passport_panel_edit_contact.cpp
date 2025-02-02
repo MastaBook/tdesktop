@@ -7,24 +7,27 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "passport/passport_panel_edit_contact.h"
 
+#include "core/file_utilities.h"
 #include "passport/passport_panel_controller.h"
 #include "passport/ui/passport_details_row.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/box_content_divider.h"
+#include "ui/widgets/sent_code_field.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h" // Ui::Text::ToUpper
-#include "ui/special_fields.h"
+#include "ui/widgets/fields/special_fields.h"
 #include "boxes/abstract_box.h"
 #include "data/data_user.h"
 #include "countries/countries_instance.h" // Countries::ExtractPhoneCode.
 #include "main/main_session.h"
 #include "lang/lang_keys.h"
+#include "styles/style_boxes.h"
 #include "styles/style_passport.h"
 #include "styles/style_layers.h"
 
@@ -38,6 +41,7 @@ public:
 		rpl::producer<QString> title,
 		const QString &text,
 		int codeLength,
+		const QString &openUrl,
 		Fn<void(QString code)> submit,
 		Fn<void()> resend,
 		rpl::producer<QString> call,
@@ -53,6 +57,7 @@ private:
 	void setupControls(
 		const QString &text,
 		int codeLength,
+		const QString &openUrl,
 		Fn<void(QString code)> submit,
 		Fn<void()> resend,
 		rpl::producer<QString> call,
@@ -61,7 +66,7 @@ private:
 
 	rpl::producer<QString> _title;
 	Fn<void()> _submit;
-	QPointer<SentCodeField> _code;
+	QPointer<Ui::SentCodeField> _code;
 	QPointer<Ui::VerticalLayout> _content;
 
 };
@@ -71,6 +76,7 @@ VerifyBox::VerifyBox(
 	rpl::producer<QString> title,
 	const QString &text,
 	int codeLength,
+	const QString &openUrl,
 	Fn<void(QString code)> submit,
 	Fn<void()> resend,
 	rpl::producer<QString> call,
@@ -80,6 +86,7 @@ VerifyBox::VerifyBox(
 	setupControls(
 		text,
 		codeLength,
+		openUrl,
 		submit,
 		resend,
 		std::move(call),
@@ -90,6 +97,7 @@ VerifyBox::VerifyBox(
 void VerifyBox::setupControls(
 		const QString &text,
 		int codeLength,
+		const QString &openUrl,
 		Fn<void(QString code)> submit,
 		Fn<void()> resend,
 		rpl::producer<QString> call,
@@ -109,7 +117,7 @@ void VerifyBox::setupControls(
 			st::boxLabel),
 		small);
 	_code = _content->add(
-		object_ptr<SentCodeField>(
+		object_ptr<Ui::SentCodeField>(
 			_content,
 			st::defaultInputField,
 			tr::lng_change_phone_code_title()),
@@ -129,12 +137,27 @@ void VerifyBox::setupControls(
 			std::move(call),
 			st::boxDividerLabel),
 		small);
+	if (!openUrl.isEmpty()) {
+		const auto button = _content->add(
+			object_ptr<Ui::RoundButton>(
+				_content,
+				tr::lng_intro_fragment_button(),
+				st::fragmentBoxButton),
+			small);
+		_content->widthValue(
+		) | rpl::start_with_next([=](int w) {
+			button->setFullWidth(w - small.left() - small.right());
+		}, button->lifetime());
+		button->setClickedCallback([=] { ::File::OpenUrl(openUrl); });
+		button->setTextTransform(
+			Ui::RoundButton::TextTransform::NoTransform);
+	}
 	if (resend) {
 		auto link = TextWithEntities{ tr::lng_cloud_password_resend(tr::now) };
 		link.entities.push_back({
 			EntityType::CustomUrl,
 			0,
-			link.text.size(),
+			int(link.text.size()),
 			QString("internal:resend") });
 		const auto label = _content->add(
 			object_ptr<Ui::FlatLabel>(
@@ -143,9 +166,7 @@ void VerifyBox::setupControls(
 					link
 				) | rpl::then(rpl::duplicate(
 					resent
-				) | rpl::map([](const QString &value) {
-					return TextWithEntities{ value };
-				})),
+				) | rpl::map(TextWithEntities::Simple)),
 				st::boxDividerLabel),
 			small);
 		std::move(
@@ -153,10 +174,7 @@ void VerifyBox::setupControls(
 		) | rpl::start_with_next([=] {
 			_content->resizeToWidth(st::boxWidth);
 		}, _content->lifetime());
-		label->setClickHandlerFilter([=](auto&&...) {
-			resend();
-			return false;
-		});
+		label->overrideLinkClickHandler(resend);
 	}
 	std::move(
 		error
@@ -177,11 +195,12 @@ void VerifyBox::setupControls(
 	if (codeLength > 0) {
 		_code->setAutoSubmit(codeLength, _submit);
 	} else {
-		connect(_code, &SentCodeField::submitted, _submit);
+		_code->submits() | rpl::start_with_next(_submit, _code->lifetime());
 	}
-	connect(_code, &SentCodeField::changed, [=] {
+	_code->changes(
+	) | rpl::start_with_next([=] {
 		problem->hide(anim::type::normal);
-	});
+	}, _code->lifetime());
 }
 
 void VerifyBox::setInnerFocus() {
@@ -280,7 +299,8 @@ void PanelEditContact::setupControls(
 			std::move(fieldPlaceholder),
 			Countries::ExtractPhoneCode(
 				_controller->bot()->session().user()->phone()),
-			data);
+			data,
+			[](const QString &s) { return Countries::Groups(s); });
 	} else {
 		_field = Ui::CreateChild<Ui::MaskedInputField>(
 			wrap.data(),
@@ -393,6 +413,7 @@ void PanelEditContact::save(const QString &value) {
 object_ptr<Ui::BoxContent> VerifyPhoneBox(
 		const QString &phone,
 		int codeLength,
+		const QString &openUrl,
 		Fn<void(QString code)> submit,
 		rpl::producer<QString> call,
 		rpl::producer<QString> error) {
@@ -403,6 +424,7 @@ object_ptr<Ui::BoxContent> VerifyPhoneBox(
 			lt_phone,
 			Ui::FormatPhone(phone)),
 		codeLength,
+		openUrl,
 		submit,
 		nullptr,
 		std::move(call),
@@ -421,6 +443,7 @@ object_ptr<Ui::BoxContent> VerifyEmailBox(
 		tr::lng_passport_email_title(),
 		tr::lng_passport_confirm_email(tr::now, lt_email, email),
 		codeLength,
+		QString(),
 		submit,
 		resend,
 		rpl::single(QString()),

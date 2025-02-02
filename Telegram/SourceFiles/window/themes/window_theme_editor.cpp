@@ -15,7 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "mainwindow.h"
 #include "storage/localstorage.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
+#include "ui/widgets/color_editor.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/buttons.h"
@@ -24,19 +25,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/style/style_palette_colorizer.h"
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
+#include "boxes/abstract_box.h"
 #include "base/parse_helper.h"
 #include "base/zlib_help.h"
 #include "base/call_delayed.h"
 #include "core/file_utilities.h"
 #include "core/application.h"
-#include "boxes/edit_color_box.h"
 #include "lang/lang_keys.h"
-#include "facades.h"
 #include "styles/style_window.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
+#include "styles/style_menu_icons.h"
 
 namespace Window {
 namespace Theme {
@@ -199,7 +201,7 @@ QString bytesToUtf8(QLatin1String bytes) {
 
 } // namespace
 
-class Editor::Inner : public Ui::RpWidget, private base::Subscriber {
+class Editor::Inner final : public Ui::RpWidget {
 public:
 	Inner(QWidget *parent, const QString &path);
 
@@ -228,7 +230,9 @@ public:
 	void recreateRows();
 
 	~Inner() {
-		if (_context.box) _context.box->closeBox();
+		if (_context.colorEditor.box) {
+			_context.colorEditor.box->closeBox();
+		}
 	}
 
 protected:
@@ -395,24 +399,36 @@ Editor::Inner::Inner(QWidget *parent, const QString &path)
 , _existingRows(this, EditorBlock::Type::Existing, &_context)
 , _newRows(this, EditorBlock::Type::New, &_context) {
 	resize(st::windowMinWidth, st::windowMinHeight);
-	subscribe(_context.resized, [this] {
+
+	_context.resized.events(
+	) | rpl::start_with_next([=] {
 		resizeToWidth(width());
-	});
-	subscribe(_context.pending, [this](const EditorBlock::Context::EditionData &data) {
+	}, lifetime());
+
+	using Context = EditorBlock::Context;
+	_context.pending.events(
+	) | rpl::start_with_next([=](const Context::EditionData &data) {
 		applyEditing(data.name, data.copyOf, data.value);
-	});
-	subscribe(_context.updated, [this] {
+	}, lifetime());
+
+	_context.updated.events(
+	) | rpl::start_with_next([=] {
 		if (_context.name.isEmpty() && _focusCallback) {
 			_focusCallback();
 		}
-	});
-	subscribe(_context.scroll, [this](const EditorBlock::Context::ScrollData &data) {
+	}, lifetime());
+
+	_context.scroll.events(
+	) | rpl::start_with_next([=](const Context::ScrollData &data) {
 		if (_scrollCallback) {
-			auto top = (data.type == EditorBlock::Type::Existing ? _existingRows : _newRows)->y();
+			auto top = (data.type == EditorBlock::Type::Existing
+				? _existingRows
+				: _newRows)->y();
 			top += data.position;
 			_scrollCallback(top, top + data.height);
 		}
-	});
+	}, lifetime());
+
 	Background()->updates(
 	) | rpl::start_with_next([=](const BackgroundUpdate &update) {
 		if (_applyingUpdate || !Background()->editingTheme()) {
@@ -422,8 +438,8 @@ Editor::Inner::Inner(QWidget *parent, const QString &path)
 		if (update.type == BackgroundUpdate::Type::TestingTheme) {
 			Revert();
 			base::call_delayed(st::slideDuration, this, [] {
-				Ui::show(Box<InformBox>(
-					tr::lng_theme_editor_cant_change_theme(tr::now)));
+				Ui::show(Ui::MakeInformBox(
+					tr::lng_theme_editor_cant_change_theme()));
 			});
 		}
 	}, lifetime());
@@ -656,18 +672,21 @@ Editor::Editor(
 , _select(this, st::defaultMultiSelect, tr::lng_country_ph())
 , _leftShadow(this)
 , _topShadow(this)
-, _save(this, tr::lng_theme_editor_save_button(tr::now).toUpper(), st::dialogsUpdateButton) {
+, _save(
+		this,
+		tr::lng_theme_editor_save_button(tr::now),
+		st::dialogsUpdateButton) {
 	const auto path = EditingPalettePath();
 
 	_inner = _scroll->setOwnedWidget(object_ptr<Inner>(this, path));
 
-	_save->setClickedCallback(App::LambdaDelayed(
+	_save->setClickedCallback(base::fn_delayed(
 		st::defaultRippleAnimation.hideDuration,
 		this,
 		[=] { save(); }));
 
 	_inner->setErrorCallback([=] {
-		window->show(Box<InformBox>(tr::lng_theme_editor_error(tr::now)));
+		window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 
 		// This could be from inner->_context observable notification.
 		// We should not destroy it while iterating in subscribers.
@@ -703,7 +722,9 @@ void Editor::showMenu() {
 	if (_menu) {
 		return;
 	}
-	_menu = base::make_unique_q<Ui::DropdownMenu>(this);
+	_menu = base::make_unique_q<Ui::DropdownMenu>(
+		this,
+		st::dropdownMenuWithIcons);
 	_menu->setHiddenCallback([weak = Ui::MakeWeak(this), menu = _menu.get()]{
 		menu->deleteLater();
 		if (weak && weak->_menu == menu) {
@@ -727,15 +748,15 @@ void Editor::showMenu() {
 		base::call_delayed(st::defaultRippleAnimation.hideDuration, this, [=] {
 			exportTheme();
 		});
-	});
+	}, &st::menuIconExportTheme);
 	_menu->addAction(tr::lng_theme_editor_menu_import(tr::now), [=] {
 		base::call_delayed(st::defaultRippleAnimation.hideDuration, this, [=] {
 			importTheme();
 		});
-	});
+	}, &st::menuIconImportTheme);
 	_menu->addAction(tr::lng_theme_editor_menu_show(tr::now), [=] {
 		File::ShowInFolder(EditingPalettePath());
-	});
+	}, &st::menuIconPalette);
 	_menu->moveToRight(st::themesMenuPosition.x(), st::themesMenuPosition.y());
 	_menu->showAnimated(Ui::PanelAnimation::Origin::TopRight);
 }
@@ -749,23 +770,21 @@ void Editor::exportTheme() {
 		QFile f(path);
 		if (!f.open(QIODevice::WriteOnly)) {
 			LOG(("Theme Error: could not open zip-ed theme file '%1' for writing").arg(path));
-			_window->show(
-				Box<InformBox>(tr::lng_theme_editor_error(tr::now)));
+			_window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 			return;
 		}
 		if (f.write(result) != result.size()) {
 			LOG(("Theme Error: could not write zip-ed theme to file '%1'").arg(path));
-			_window->show(
-				Box<InformBox>(tr::lng_theme_editor_error(tr::now)));
+			_window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 			return;
 		}
-		Ui::Toast::Show(tr::lng_theme_editor_done(tr::now));
+		_window->showToast(tr::lng_theme_editor_done(tr::now));
 	}));
 }
 
 void Editor::importTheme() {
 	auto filters = QStringList(
-		qsl("Theme files (*.tdesktop-theme *.tdesktop-palette)"));
+		u"Theme files (*.tdesktop-theme *.tdesktop-palette)"_q);
 	filters.push_back(FileDialog::AllFilesFilter());
 	const auto callback = crl::guard(this, [=](
 		const FileDialog::OpenResult &result) {
@@ -804,7 +823,7 @@ void Editor::importTheme() {
 	FileDialog::GetOpenPath(
 		this,
 		tr::lng_theme_editor_menu_import(tr::now),
-		filters.join(qsl(";;")),
+		filters.join(u";;"_q),
 		crl::guard(this, callback));
 }
 
@@ -816,10 +835,10 @@ QByteArray Editor::ColorizeInContent(
 
 void Editor::save() {
 	if (Core::App().passcodeLocked()) {
-		Ui::Toast::Show(tr::lng_theme_editor_need_unlock(tr::now));
+		_window->showToast(tr::lng_theme_editor_need_unlock(tr::now));
 		return;
 	} else if (!_window->account().sessionExists()) {
-		Ui::Toast::Show(tr::lng_theme_editor_need_auth(tr::now));
+		_window->showToast(tr::lng_theme_editor_need_auth(tr::now));
 		return;
 	} else if (_saving) {
 		return;
@@ -903,10 +922,11 @@ void Editor::closeWithConfirmation() {
 		closeEditor();
 		close();
 	});
-	_window->show(Box<ConfirmBox>(
-		tr::lng_theme_editor_sure_close(tr::now),
-		tr::lng_close(tr::now),
-		close));
+	_window->show(Ui::MakeConfirmBox({
+		.text = tr::lng_theme_editor_sure_close(),
+		.confirmed = close,
+		.confirmText = tr::lng_close(),
+	}));
 }
 
 void Editor::closeEditor() {

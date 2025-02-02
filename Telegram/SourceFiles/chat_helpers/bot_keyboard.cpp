@@ -7,17 +7,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "chat_helpers/bot_keyboard.h"
 
+#include "api/api_bot.h"
 #include "core/click_handler_types.h"
+#include "data/data_session.h"
+#include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item_components.h"
-#include "data/data_user.h"
-#include "data/data_session.h"
 #include "main/main_session.h"
-#include "window/window_session_controller.h"
 #include "ui/cached_round_corners.h"
-#include "facades.h"
-#include "styles/style_widgets.h"
+#include "ui/painter.h"
+#include "ui/ui_utility.h"
+#include "window/window_session_controller.h"
 #include "styles/style_chat.h"
+#include "styles/style_widgets.h"
 
 namespace {
 
@@ -27,28 +29,33 @@ public:
 		not_null<BotKeyboard*> parent,
 		const style::BotKeyboardButton &st);
 
-	int buttonRadius() const override;
+	Images::CornersMaskRef buttonRounding(
+		Ui::BubbleRounding outer,
+		RectParts sides) const override;
 
-	void startPaint(Painter &p, const Ui::ChatStyle *st) const override;
+	void startPaint(QPainter &p, const Ui::ChatStyle *st) const override;
 	const style::TextStyle &textStyle() const override;
 	void repaint(not_null<const HistoryItem*> item) const override;
 
 protected:
 	void paintButtonBg(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
 		const QRect &rect,
+		Ui::BubbleRounding rounding,
 		float64 howMuchOver) const override;
 	void paintButtonIcon(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
 		const QRect &rect,
 		int outerWidth,
 		HistoryMessageMarkupButton::Type type) const override;
 	void paintButtonLoading(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
-		const QRect &rect) const override;
+		const QRect &rect,
+		int outerWidth,
+		Ui::BubbleRounding rounding) const override;
 	int minButtonWidth(HistoryMessageMarkupButton::Type type) const override;
 
 private:
@@ -62,7 +69,7 @@ Style::Style(
 : ReplyKeyboard::Style(st), _parent(parent) {
 }
 
-void Style::startPaint(Painter &p, const Ui::ChatStyle *st) const {
+void Style::startPaint(QPainter &p, const Ui::ChatStyle *st) const {
 	p.setPen(st::botKbColor);
 	p.setFont(st::botKbStyle.font);
 }
@@ -75,20 +82,24 @@ void Style::repaint(not_null<const HistoryItem*> item) const {
 	_parent->update();
 }
 
-int Style::buttonRadius() const {
-	return st::roundRadiusSmall;
+Images::CornersMaskRef Style::buttonRounding(
+		Ui::BubbleRounding outer,
+		RectParts sides) const {
+	using namespace Images;
+	return CornersMaskRef(CornersMask(ImageRoundRadius::Small));
 }
 
 void Style::paintButtonBg(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
 		const QRect &rect,
+		Ui::BubbleRounding rounding,
 		float64 howMuchOver) const {
 	Ui::FillRoundRect(p, rect, st::botKbBg, Ui::BotKeyboardCorners);
 }
 
 void Style::paintButtonIcon(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
 		const QRect &rect,
 		int outerWidth,
@@ -97,9 +108,11 @@ void Style::paintButtonIcon(
 }
 
 void Style::paintButtonLoading(
-		Painter &p,
+		QPainter &p,
 		const Ui::ChatStyle *st,
-		const QRect &rect) const {
+		const QRect &rect,
+		int outerWidth,
+		Ui::BubbleRounding rounding) const {
 	// Buttons with loading progress should not appear here.
 }
 
@@ -130,7 +143,12 @@ void BotKeyboard::paintEvent(QPaintEvent *e) {
 	if (_impl) {
 		int x = rtl() ? st::botKbScroll.width : _st->margin;
 		p.translate(x, st::botKbScroll.deltat);
-		_impl->paint(p, nullptr, width(), clip.translated(-x, -st::botKbScroll.deltat));
+		_impl->paint(
+			p,
+			nullptr,
+			Ui::BubbleRounding(),
+			width(),
+			clip.translated(-x, -st::botKbScroll.deltat));
 	}
 }
 
@@ -154,13 +172,13 @@ void BotKeyboard::mouseReleaseEvent(QMouseEvent *e) {
 		ActivateClickHandler(window(), activated, {
 			e->button(),
 			QVariant::fromValue(ClickHandlerContext{
-				.sessionWindow = base::make_weak(_controller.get()),
+				.sessionWindow = base::make_weak(_controller),
 			})
 		});
 	}
 }
 
-void BotKeyboard::enterEventHook(QEvent *e) {
+void BotKeyboard::enterEventHook(QEnterEvent *e) {
 	_lastMousePos = QCursor::pos();
 	updateSelected();
 }
@@ -169,7 +187,9 @@ void BotKeyboard::leaveEventHook(QEvent *e) {
 	clearSelection();
 }
 
-bool BotKeyboard::moderateKeyActivate(int key) {
+bool BotKeyboard::moderateKeyActivate(
+		int key,
+		Fn<ClickContext(FullMsgId)> context) {
 	const auto &data = _controller->session().data();
 
 	const auto botCommand = [](int key) {
@@ -199,10 +219,14 @@ bool BotKeyboard::moderateKeyActivate(int key) {
 		if (const auto markup = item->Get<HistoryMessageReplyMarkup>()) {
 			if (key >= Qt::Key_1 && key <= Qt::Key_2) {
 				const auto index = int(key - Qt::Key_1);
-				if (!markup->rows.empty()
+				if (!markup->data.rows.empty()
 					&& index >= 0
-					&& index < int(markup->rows.front().size())) {
-					App::activateBotCommand(_controller, item, 0, index);
+					&& index < int(markup->data.rows.front().size())) {
+					Api::ActivateBotCommand(
+						context(
+							_wasForMsgId).other.value<ClickHandlerContext>(),
+						0,
+						index);
 					return true;
 				}
 			} else if (const auto user = item->history()->peer->asUser()) {
@@ -230,13 +254,13 @@ void BotKeyboard::clickHandlerActiveChanged(const ClickHandlerPtr &p, bool activ
 
 void BotKeyboard::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) {
 	if (!_impl) return;
-	_impl->clickHandlerPressedChanged(p, pressed);
+	_impl->clickHandlerPressedChanged(p, pressed, Ui::BubbleRounding());
 }
 
 bool BotKeyboard::updateMarkup(HistoryItem *to, bool force) {
 	if (!to || !to->definesReplyKeyboard()) {
 		if (_wasForMsgId.msg) {
-			_maximizeSize = _singleUse = _forceReply = false;
+			_maximizeSize = _singleUse = _forceReply = _persistent = false;
 			_wasForMsgId = FullMsgId();
 			_placeholder = QString();
 			_impl = nullptr;
@@ -245,26 +269,28 @@ bool BotKeyboard::updateMarkup(HistoryItem *to, bool force) {
 		return false;
 	}
 
-	if (_wasForMsgId == FullMsgId(to->channelId(), to->id) && !force) {
+	const auto peerId = to->history()->peer->id;
+	if (_wasForMsgId == FullMsgId(peerId, to->id) && !force) {
 		return false;
 	}
 
-	_wasForMsgId = FullMsgId(to->channelId(), to->id);
+	_wasForMsgId = FullMsgId(peerId, to->id);
 
 	auto markupFlags = to->replyKeyboardFlags();
 	_forceReply = markupFlags & ReplyMarkupFlag::ForceReply;
 	_maximizeSize = !(markupFlags & ReplyMarkupFlag::Resize);
 	_singleUse = _forceReply || (markupFlags & ReplyMarkupFlag::SingleUse);
+	_persistent = (markupFlags & ReplyMarkupFlag::Persistent);
 
 	if (const auto markup = to->Get<HistoryMessageReplyMarkup>()) {
-		_placeholder = markup->placeholder;
+		_placeholder = markup->data.placeholder;
 	} else {
 		_placeholder = QString();
 	}
 
 	_impl = nullptr;
 	if (auto markup = to->Get<HistoryMessageReplyMarkup>()) {
-		if (!markup->rows.empty()) {
+		if (!markup->data.rows.empty()) {
 			_impl = std::make_unique<ReplyKeyboard>(
 				to,
 				std::make_unique<Style>(this, *_st));
@@ -304,6 +330,10 @@ bool BotKeyboard::maximizeSize() const {
 
 bool BotKeyboard::singleUse() const {
 	return _singleUse;
+}
+
+bool BotKeyboard::persistent() const {
+	return _persistent;
 }
 
 void BotKeyboard::updateStyle(int newWidth) {

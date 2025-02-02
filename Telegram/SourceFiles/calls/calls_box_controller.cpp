@@ -12,10 +12,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/popup_menu.h"
+#include "ui/painter.h"
 #include "core/application.h"
 #include "calls/calls_instance.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/history_item_helpers.h"
 #include "mainwidget.h"
 #include "window/window_session_controller.h"
 #include "main/main_session.h"
@@ -23,13 +25,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_media_types.h"
 #include "data/data_user.h"
-#include "boxes/confirm_box.h"
+#include "data/data_peer_values.h" // Data::ChannelHasActiveCall.
+#include "data/data_group_call.h"
+#include "data/data_channel.h"
+#include "boxes/delete_messages_box.h"
 #include "base/unixtime.h"
 #include "api/api_updates.h"
 #include "apiwrap.h"
 #include "styles/style_layers.h" // st::boxLabel.
 #include "styles/style_calls.h"
 #include "styles/style_boxes.h"
+#include "styles/style_menu_icons.h"
 
 namespace Calls {
 namespace {
@@ -37,7 +43,199 @@ namespace {
 constexpr auto kFirstPageCount = 20;
 constexpr auto kPerPageCount = 100;
 
+class GroupCallRow final : public PeerListRow {
+public:
+	GroupCallRow(not_null<PeerData*> peer);
+
+	void rightActionAddRipple(
+		QPoint point,
+		Fn<void()> updateCallback) override;
+	void rightActionStopLastRipple() override;
+
+	int paintNameIconGetWidth(
+			Painter &p,
+			Fn<void()> repaint,
+			crl::time now,
+			int nameLeft,
+			int nameTop,
+			int nameWidth,
+			int availableWidth,
+			int outerWidth,
+			bool selected) override {
+		return 0;
+	}
+	QSize rightActionSize() const override {
+		return peer()->isChannel() ? QSize(_st.width, _st.height) : QSize();
+	}
+	QMargins rightActionMargins() const override {
+		return QMargins(
+			0,
+			0,
+			st::defaultPeerListItem.photoPosition.x(),
+			0);
+	}
+	void rightActionPaint(
+		Painter &p,
+		int x,
+		int y,
+		int outerWidth,
+		bool selected,
+		bool actionSelected) override;
+
+private:
+	const style::IconButton &_st;
+	std::unique_ptr<Ui::RippleAnimation> _actionRipple;
+
+};
+
+GroupCallRow::GroupCallRow(not_null<PeerData*> peer)
+: PeerListRow(peer)
+, _st(st::callGroupCall) {
+	if (const auto channel = peer->asChannel()) {
+		const auto status = (channel->isMegagroup()
+			? (channel->isPublic()
+				? tr::lng_create_public_channel_title
+				: tr::lng_create_private_channel_title)
+			: (channel->isPublic()
+				? tr::lng_create_public_group_title
+				: tr::lng_create_private_group_title))(tr::now);
+		setCustomStatus(status.toLower());
+	}
+}
+
+void GroupCallRow::rightActionPaint(
+		Painter &p,
+		int x,
+		int y,
+		int outerWidth,
+		bool selected,
+		bool actionSelected) {
+	auto size = rightActionSize();
+	if (_actionRipple) {
+		_actionRipple->paint(
+			p,
+			x + _st.rippleAreaPosition.x(),
+			y + _st.rippleAreaPosition.y(),
+			outerWidth);
+		if (_actionRipple->empty()) {
+			_actionRipple.reset();
+		}
+	}
+	_st.icon.paintInCenter(
+		p,
+		style::rtlrect(x, y, size.width(), size.height(), outerWidth));
+}
+
+void GroupCallRow::rightActionAddRipple(
+		QPoint point,
+		Fn<void()> updateCallback) {
+	if (!_actionRipple) {
+		auto mask = Ui::RippleAnimation::EllipseMask(
+			QSize(_st.rippleAreaSize, _st.rippleAreaSize));
+		_actionRipple = std::make_unique<Ui::RippleAnimation>(
+			_st.ripple,
+			std::move(mask),
+			std::move(updateCallback));
+	}
+	_actionRipple->add(point - _st.rippleAreaPosition);
+}
+
+void GroupCallRow::rightActionStopLastRipple() {
+	if (_actionRipple) {
+		_actionRipple->lastStop();
+	}
+}
+
 } // namespace
+
+namespace GroupCalls {
+
+ListController::ListController(not_null<Window::SessionController*> window)
+: _window(window) {
+	setStyleOverrides(&st::peerListSingleRow);
+}
+
+Main::Session &ListController::session() const {
+	return _window->session();
+}
+
+void ListController::prepare() {
+	const auto removeRow = [=](not_null<PeerData*> peer) {
+		const auto it = _groupCalls.find(peer->id);
+		if (it != end(_groupCalls)) {
+			const auto &row = it->second;
+			delegate()->peerListRemoveRow(row);
+			_groupCalls.erase(it);
+		}
+	};
+	const auto createRow = [=](not_null<PeerData*> peer) {
+		const auto it = _groupCalls.find(peer->id);
+		if (it == end(_groupCalls)) {
+			auto row = std::make_unique<GroupCallRow>(peer);
+			_groupCalls.emplace(peer->id, row.get());
+			delegate()->peerListAppendRow(std::move(row));
+		}
+	};
+
+	const auto processPeer = [=](PeerData *peer) {
+		if (!peer) {
+			return;
+		}
+		const auto channel = peer->asChannel();
+		if (channel && Data::ChannelHasActiveCall(channel)) {
+			createRow(peer);
+		} else {
+			removeRow(peer);
+		}
+	};
+	const auto finishProcess = [=] {
+		delegate()->peerListRefreshRows();
+		_fullCount = delegate()->peerListFullRowsCount();
+	};
+
+	session().changes().peerUpdates(
+		Data::PeerUpdate::Flag::GroupCall
+	) | rpl::start_with_next([=](const Data::PeerUpdate &update) {
+		processPeer(update.peer);
+		finishProcess();
+	}, lifetime());
+
+	{
+		auto count = 0;
+		const auto list = session().data().chatsList(nullptr);
+		for (const auto &key : list->pinned()->order()) {
+			processPeer(key.peer());
+		}
+		for (const auto &key : list->indexed()->all()) {
+			if (count > kFirstPageCount) {
+				break;
+			}
+			processPeer(key->key().peer());
+			count++;
+		}
+		finishProcess();
+	}
+}
+
+rpl::producer<bool> ListController::shownValue() const {
+	return _fullCount.value(
+	) | rpl::map(rpl::mappers::_1 > 0) | rpl::distinct_until_changed();
+}
+
+void ListController::rowClicked(not_null<PeerListRow*> row) {
+	const auto window = _window;
+	crl::on_main(window, [=, peer = row->peer()] {
+		window->showPeerHistory(
+			peer,
+			Window::SectionShow::Way::ClearStack);
+	});
+}
+
+void ListController::rowRightActionClicked(not_null<PeerListRow*> row) {
+	_window->startOrJoinGroupCall(row->peer());
+}
+
+} // namespace GroupCalls
 
 class BoxController::Row : public PeerListRow {
 public:
@@ -102,23 +300,34 @@ public:
 		int availableWidth,
 		int outerWidth,
 		bool selected) override;
-	void addActionRipple(QPoint point, Fn<void()> updateCallback) override;
-	void stopLastActionRipple() override;
+	void rightActionAddRipple(
+		QPoint point,
+		Fn<void()> updateCallback) override;
+	void rightActionStopLastRipple() override;
 
-	int nameIconWidth() const override {
+	int paintNameIconGetWidth(
+			Painter &p,
+			Fn<void()> repaint,
+			crl::time now,
+			int nameLeft,
+			int nameTop,
+			int nameWidth,
+			int availableWidth,
+			int outerWidth,
+			bool selected) override {
 		return 0;
 	}
-	QSize actionSize() const override {
+	QSize rightActionSize() const override {
 		return peer()->isUser() ? QSize(_st->width, _st->height) : QSize();
 	}
-	QMargins actionMargins() const override {
+	QMargins rightActionMargins() const override {
 		return QMargins(
 			0,
 			0,
 			st::defaultPeerListItem.photoPosition.x(),
 			0);
 	}
-	void paintAction(
+	void rightActionPaint(
 		Painter &p,
 		int x,
 		int y,
@@ -141,7 +350,7 @@ private:
 };
 
 BoxController::Row::Row(not_null<HistoryItem*> item)
-: PeerListRow(item->history()->peer, item->id)
+: PeerListRow(item->history()->peer, item->id.bare)
 , _items(1, item)
 , _date(ItemDateTime(item).date())
 , _type(ComputeType(item))
@@ -168,14 +377,14 @@ void BoxController::Row::paintStatusText(Painter &p, const style::PeerListItem &
 	PeerListRow::paintStatusText(p, st, x, y, availableWidth, outerWidth, selected);
 }
 
-void BoxController::Row::paintAction(
+void BoxController::Row::rightActionPaint(
 		Painter &p,
 		int x,
 		int y,
 		int outerWidth,
 		bool selected,
 		bool actionSelected) {
-	auto size = actionSize();
+	auto size = rightActionSize();
 	if (_actionRipple) {
 		_actionRipple->paint(
 			p,
@@ -196,7 +405,7 @@ void BoxController::Row::refreshStatus() {
 		return;
 	}
 	auto text = [this] {
-		auto time = ItemDateTime(_items.front()).time().toString(cTimeFormat());
+		auto time = QLocale().toString(ItemDateTime(_items.front()).time(), QLocale::ShortFormat);
 		auto today = QDateTime::currentDateTime().date();
 		if (_date == today) {
 			return tr::lng_call_box_status_today(tr::now, lt_time, time);
@@ -243,9 +452,9 @@ BoxController::Row::CallType BoxController::Row::ComputeCallType(
 	return CallType::Voice;
 }
 
-void BoxController::Row::addActionRipple(QPoint point, Fn<void()> updateCallback) {
+void BoxController::Row::rightActionAddRipple(QPoint point, Fn<void()> updateCallback) {
 	if (!_actionRipple) {
-		auto mask = Ui::RippleAnimation::ellipseMask(
+		auto mask = Ui::RippleAnimation::EllipseMask(
 			QSize(_st->rippleAreaSize, _st->rippleAreaSize));
 		_actionRipple = std::make_unique<Ui::RippleAnimation>(
 			_st->ripple,
@@ -255,7 +464,7 @@ void BoxController::Row::addActionRipple(QPoint point, Fn<void()> updateCallback
 	_actionRipple->add(point - _st->rippleAreaPosition);
 }
 
-void BoxController::Row::stopLastActionRipple() {
+void BoxController::Row::rightActionStopLastRipple() {
 	if (_actionRipple) {
 		_actionRipple->lastStop();
 	}
@@ -311,6 +520,8 @@ void BoxController::loadMoreRows() {
 		MTP_inputPeerEmpty(),
 		MTP_string(), // q
 		MTP_inputPeerEmpty(),
+		MTPInputPeer(), // saved_peer_id
+		MTPVector<MTPReaction>(), // saved_reaction
 		MTPint(), // top_msg_id
 		MTP_inputMessagesFilterPhoneCalls(MTP_flags(0)),
 		MTP_int(0), // min_date
@@ -342,7 +553,7 @@ void BoxController::loadMoreRows() {
 		} break;
 		default: Unexpected("Type of messages.Messages (Calls::BoxController::preloadRows)");
 		}
-	}).fail([this](const MTP::Error &error) {
+	}).fail([this] {
 		_loadRequestId = 0;
 	}).send();
 }
@@ -354,12 +565,18 @@ base::unique_qptr<Ui::PopupMenu> BoxController::rowContextMenu(
 	const auto session = &this->session();
 	const auto ids = session->data().itemsToIds(items);
 
-	auto result = base::make_unique_q<Ui::PopupMenu>(parent);
+	auto result = base::make_unique_q<Ui::PopupMenu>(
+		parent,
+		st::popupMenuWithIcons);
 	result->addAction(tr::lng_context_delete_selected(tr::now), [=] {
 		_window->show(
-			Box<DeleteMessagesBox>(session, base::duplicate(ids)),
-			Ui::LayerOption::KeepOther);
-	});
+			Box<DeleteMessagesBox>(session, base::duplicate(ids)));
+	}, &st::menuIconDelete);
+	result->addAction(tr::lng_context_to_msg(tr::now), [=, window = _window] {
+		if (const auto item = session->data().message(ids.front())) {
+			window->showMessage(item);
+		}
+	}, &st::menuIconShowInChat);
 	return result;
 }
 
@@ -379,7 +596,7 @@ void BoxController::rowClicked(not_null<PeerListRow*> row) {
 	});
 }
 
-void BoxController::rowActionClicked(not_null<PeerListRow*> row) {
+void BoxController::rowRightActionClicked(not_null<PeerListRow*> row) {
 	auto user = row->peer()->asUser();
 	Assert(user != nullptr);
 

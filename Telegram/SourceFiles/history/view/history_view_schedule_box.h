@@ -7,14 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/layers/generic_box.h"
+#include "api/api_common.h"
+#include "ui/boxes/choose_date_time.h"
 
-namespace Api {
-struct SendOptions;
-} // namespace Api
+namespace style {
+struct IconButton;
+struct PopupMenu;
+} // namespace style
+
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
 
 namespace SendMenu {
-enum class Type;
+struct Details;
 } // namespace SendMenu
 
 namespace HistoryView {
@@ -22,23 +28,39 @@ namespace HistoryView {
 [[nodiscard]] TimeId DefaultScheduleTime();
 [[nodiscard]] bool CanScheduleUntilOnline(not_null<PeerData*> peer);
 
+struct ScheduleBoxStyleArgs {
+	ScheduleBoxStyleArgs();
+	const style::IconButton *topButtonStyle;
+	const style::PopupMenu *popupMenuStyle;
+	Ui::ChooseDateTimeStyleArgs chooseDateTimeArgs;
+};
+
 void ScheduleBox(
 	not_null<Ui::GenericBox*> box,
-	SendMenu::Type type,
+	std::shared_ptr<ChatHelpers::Show> show,
+	const Api::SendOptions &initialOptions,
+	const SendMenu::Details &details,
 	Fn<void(Api::SendOptions)> done,
-	TimeId time);
+	TimeId time,
+	ScheduleBoxStyleArgs style);
 
 template <typename Guard, typename Submit>
 [[nodiscard]] object_ptr<Ui::GenericBox> PrepareScheduleBox(
 		Guard &&guard,
-		SendMenu::Type type,
+		std::shared_ptr<ChatHelpers::Show> show,
+		const SendMenu::Details &details,
 		Submit &&submit,
-		TimeId scheduleTime = DefaultScheduleTime()) {
+		const Api::SendOptions &initialOptions = {},
+		TimeId scheduleTime = DefaultScheduleTime(),
+		ScheduleBoxStyleArgs style = ScheduleBoxStyleArgs()) {
 	return Box(
 		ScheduleBox,
-		type,
+		std::move(show),
+		initialOptions,
+		details,
 		crl::guard(std::forward<Guard>(guard), std::forward<Submit>(submit)),
-		scheduleTime);
+		scheduleTime,
+		std::move(style));
 }
 
 } // namespace HistoryView

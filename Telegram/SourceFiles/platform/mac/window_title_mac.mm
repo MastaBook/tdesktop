@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_window_title.h"
 
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "core/application.h"
 #include "styles/style_window.h"
 #include "styles/style_media_view.h"
@@ -21,8 +22,8 @@ namespace Platform {
 // account, with 100% scale and without "px" dimensions, because thats
 // how it will look in real launched macOS app.
 int PreviewTitleHeight() {
-	if (auto window = Core::App().activeWindow()) {
-		if (auto height = window->widget()->getCustomTitleHeight()) {
+	if (const auto window = Core::App().activePrimaryWindow()) {
+		if (const auto height = window->widget()->getCustomTitleHeight()) {
 			return height;
 		}
 	}
@@ -31,7 +32,7 @@ int PreviewTitleHeight() {
 
 QImage PreviewWindowSystemButton(QColor inner, QColor border) {
 	auto buttonSize = 12;
-	auto fullSize = buttonSize * cIntRetinaFactor();
+	auto fullSize = buttonSize * style::DevicePixelRatio();
 	auto result = QImage(fullSize, fullSize, QImage::Format_ARGB32_Premultiplied);
 	result.fill(Qt::transparent);
 	{
@@ -42,7 +43,7 @@ QImage PreviewWindowSystemButton(QColor inner, QColor border) {
 		p.setBrush(inner);
 		p.drawEllipse(QRectF(0.5, 0.5, fullSize - 1., fullSize - 1.));
 	}
-	result.setDevicePixelRatio(cRetinaFactor());
+	result.setDevicePixelRatio(style::DevicePixelRatio());
 	return result;
 }
 
@@ -52,27 +53,33 @@ void PreviewWindowTitle(Painter &p, const style::palette &palette, QRect body, i
 	p.fillRect(titleRect, st::titleBgActive[palette]);
 	p.fillRect(titleRect.x(), titleRect.y() + titleRect.height() - st::lineWidth, titleRect.width(), st::lineWidth, st::titleShadow[palette]);
 
-	auto useSystemFont = false;
 	QFont font;
-	QStringList families = { qsl(".SF NS Text"), qsl("Helvetica Neue") };
+	const auto families = QStringList{
+		u".AppleSystemUIFont"_q,
+		u".SF NS Text"_q,
+		u"Helvetica Neue"_q,
+	};
 	for (auto family : families) {
 		font.setFamily(family);
 		if (QFontInfo(font).family() == font.family()) {
-			useSystemFont = true;
 			break;
 		}
 	}
 
-	if (useSystemFont) {
-		font.setPixelSize((titleHeight * 15) / 24);
+	if (QFontInfo(font).family() != font.family()) {
+		font = st::semiboldFont;
+		font.setPixelSize(13);
+	} else if (font.family() == u".AppleSystemUIFont"_q) {
+		font.setBold(true);
+		font.setPixelSize(13);
 	} else {
-		font = st::normalFont;
+		font.setPixelSize((titleHeight * 15) / 24);
 	}
 
 	p.setPen(st::titleFgActive[palette]);
 	p.setFont(font);
 
-	p.drawText(titleRect, qsl("Telegram"), style::al_center);
+	p.drawText(titleRect, u"Telegram"_q, style::al_center);
 
 	auto isGraphite = ([NSColor currentControlTint] == NSGraphiteControlTint);
 	auto buttonSkip = 8;
@@ -86,17 +93,32 @@ void PreviewWindowTitle(Painter &p, const style::palette &palette, QRect body, i
 	auto maximizeBorder = isGraphite ? graphiteBorder : QColor(21, 164, 41);
 	auto close = PreviewWindowSystemButton(closeInner, closeBorder);
 	auto left = buttonSkip;
-	p.drawImage(titleRect.x() + left, titleRect.y() + (titleRect.height() - (close.height() / cIntRetinaFactor())) / 2, close);
-	left += (close.width() / cIntRetinaFactor()) + buttonSkip;
+	p.drawImage(
+		titleRect.x() + left,
+		titleRect.y()
+			+ (titleRect.height()
+				- (close.height() / style::DevicePixelRatio())) / 2,
+		close);
+	left += (close.width() / style::DevicePixelRatio()) + buttonSkip;
 	auto minimize = PreviewWindowSystemButton(minimizeInner, minimizeBorder);
-	p.drawImage(titleRect.x() + left, titleRect.y() + (titleRect.height() - (minimize.height() / cIntRetinaFactor())) / 2, minimize);
-	left += (minimize.width() / cIntRetinaFactor()) + buttonSkip;
+	p.drawImage(
+		titleRect.x() + left,
+		titleRect.y()
+			+ (titleRect.height()
+				- (minimize.height() / style::DevicePixelRatio())) / 2,
+		minimize);
+	left += (minimize.width() / style::DevicePixelRatio()) + buttonSkip;
 	auto maximize = PreviewWindowSystemButton(maximizeInner, maximizeBorder);
-	p.drawImage(titleRect.x() + left, titleRect.y() + (titleRect.height() - (maximize.height() / cIntRetinaFactor())) / 2, maximize);
+	p.drawImage(
+		titleRect.x() + left,
+		titleRect.y()
+			+ (titleRect.height()
+				- (maximize.height() / style::DevicePixelRatio())) / 2,
+		maximize);
 }
 
 void PreviewWindowFramePaint(QImage &preview, const style::palette &palette, QRect body, int outerWidth) {
-	auto retina = cIntRetinaFactor();
+	auto retina = style::DevicePixelRatio();
 	auto titleHeight = PreviewTitleHeight();
 	{
 		Painter p(&preview);
@@ -106,7 +128,7 @@ void PreviewWindowFramePaint(QImage &preview, const style::palette &palette, QRe
 
 	auto retinaRadius = st::macWindowRoundRadius * retina;
 	auto roundMask = QImage(2 * retinaRadius, 2 * retinaRadius, QImage::Format_ARGB32_Premultiplied);
-	roundMask.setDevicePixelRatio(cRetinaFactor());
+	roundMask.setDevicePixelRatio(style::DevicePixelRatio());
 	roundMask.fill(Qt::transparent);
 	{
 		Painter p(&roundMask);
@@ -121,9 +143,14 @@ void PreviewWindowFramePaint(QImage &preview, const style::palette &palette, QRe
 	corners[1] = roundMask.copy(retinaRadius, 0, retinaRadius, retinaRadius);
 	corners[2] = roundMask.copy(0, retinaRadius, retinaRadius, retinaRadius);
 	corners[3] = roundMask.copy(retinaRadius, retinaRadius, retinaRadius, retinaRadius);
-	auto rounded = preview.copy(inner.x() * retina, inner.y() * retina, inner.width() * retina, inner.height() * retina);
-	Images::prepareRound(rounded, corners);
-	rounded.setDevicePixelRatio(cRetinaFactor());
+	auto rounded = Images::Round(
+		preview.copy(
+			inner.x() * retina,
+			inner.y() * retina,
+			inner.width() * retina,
+			inner.height() * retina),
+			corners);
+	rounded.setDevicePixelRatio(style::DevicePixelRatio());
 	preview.fill(st::themePreviewBg->c);
 
 	auto topLeft = st::macWindowShadowTopLeft.instance(QColor(0, 0, 0), 100);

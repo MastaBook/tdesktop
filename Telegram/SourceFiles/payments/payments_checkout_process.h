@@ -7,8 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "payments/ui/payments_panel_delegate.h"
 #include "base/weak_ptr.h"
+#include "payments/ui/payments_panel_delegate.h"
+#include "webview/webview_common.h"
 
 class HistoryItem;
 class PasscodeBox;
@@ -36,10 +37,37 @@ namespace Payments {
 class Form;
 struct FormUpdate;
 struct Error;
+struct InvoiceCredits;
+struct InvoiceStarGift;
+struct InvoiceId;
+struct InvoicePremiumGiftCode;
+struct CreditsFormData;
+struct CreditsReceiptData;
 
 enum class Mode {
 	Payment,
 	Receipt,
+};
+
+enum class CheckoutResult {
+	Paid,
+	Pending,
+	Cancelled,
+	Failed,
+};
+
+struct RealFormPresentedNotification {
+};
+struct NonPanelPaymentForm
+	: std::variant<
+		std::shared_ptr<CreditsFormData>,
+		std::shared_ptr<CreditsReceiptData>,
+		RealFormPresentedNotification> {
+	using variant::variant;
+};
+
+struct PaidInvoice {
+	QString title;
 };
 
 class CheckoutProcess final
@@ -51,16 +79,35 @@ public:
 	static void Start(
 		not_null<const HistoryItem*> item,
 		Mode mode,
-		Fn<void()> reactivate);
-	[[nodiscard]] static bool TakePaymentStarted(
+		Fn<void(CheckoutResult)> reactivate,
+		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess);
+	static void Start(
+		not_null<Main::Session*> session,
+		const QString &slug,
+		Fn<void(CheckoutResult)> reactivate,
+		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess);
+	static void Start(
+		InvoicePremiumGiftCode giftCodeInvoice,
+		Fn<void(CheckoutResult)> reactivate);
+	static void Start(
+		InvoiceCredits creditsInvoice,
+		Fn<void(CheckoutResult)> reactivate);
+	static void Start(
+		InvoiceStarGift giftInvoice,
+		Fn<void(CheckoutResult)> reactivate,
+		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess);
+	[[nodiscard]] static std::optional<PaidInvoice> InvoicePaid(
 		not_null<const HistoryItem*> item);
+	[[nodiscard]] static std::optional<PaidInvoice> InvoicePaid(
+		not_null<Main::Session*> session,
+		const QString &slug);
 	static void ClearAll();
 
 	CheckoutProcess(
-		not_null<PeerData*> peer,
-		MsgId itemId,
+		InvoiceId id,
 		Mode mode,
-		Fn<void()> reactivate,
+		Fn<void(CheckoutResult)> reactivate,
+		Fn<void(NonPanelPaymentForm)> nonPanelPaymentFormProcess,
 		PrivateTag);
 	~CheckoutProcess();
 
@@ -73,12 +120,15 @@ private:
 	};
 	[[nodiscard]] not_null<PanelDelegate*> panelDelegate();
 
-	static void RegisterPaymentStart(not_null<CheckoutProcess*> process);
+	static void RegisterPaymentStart(
+		not_null<CheckoutProcess*> process,
+		PaidInvoice info);
 	static void UnregisterPaymentStart(not_null<CheckoutProcess*> process);
 
-	void setReactivateCallback(Fn<void()> reactivate);
+	void setReactivateCallback(Fn<void(CheckoutResult)> reactivate);
+	void setNonPanelPaymentFormProcess(Fn<void(NonPanelPaymentForm)>);
 	void requestActivate();
-	void closeAndReactivate();
+	void closeAndReactivate(CheckoutResult result);
 	void close();
 
 	void handleFormUpdate(const FormUpdate &update);
@@ -103,6 +153,7 @@ private:
 	void panelCloseSure() override;
 	void panelSubmit() override;
 	void panelTrustAndSubmit() override;
+	void panelAcceptTermsAndSubmit() override;
 	void panelWebviewMessage(
 		const QJsonDocument &message,
 		bool saveInformation) override;
@@ -126,16 +177,24 @@ private:
 		Ui::UncheckedCardDetails data,
 		bool saveInformation) override;
 	void panelShowBox(object_ptr<Ui::BoxContent> box) override;
+	QVariant panelClickHandlerContext() override;
 
-	QString panelWebviewDataPath() override;
+	Webview::StorageId panelWebviewStorageId() override;
+	Webview::ThemeParams panelWebviewThemeParams() override;
+
+	std::optional<QDate> panelOverrideExpireDateThreshold() override;
 
 	const not_null<Main::Session*> _session;
 	const std::unique_ptr<Form> _form;
 	const std::unique_ptr<Ui::Panel> _panel;
 	QPointer<PasscodeBox> _enterPasswordBox;
-	Fn<void()> _reactivate;
+	Fn<void(CheckoutResult)> _reactivate;
+	Fn<void(NonPanelPaymentForm)> _nonPanelPaymentFormProcess;
 	SubmitState _submitState = SubmitState::None;
 	bool _initialSilentValidation = false;
+	bool _realFormNotified = false;
+	bool _sendFormPending = false;
+	bool _sendFormFailed = false;
 
 	rpl::lifetime _gettingPasswordState;
 	rpl::lifetime _lifetime;

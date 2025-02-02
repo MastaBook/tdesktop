@@ -7,12 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
-#include "base/observer.h"
+#include "ui/layers/box_content.h"
 #include "base/timer.h"
+#include "history/view/history_view_schedule_box.h"
+#include "ui/chat/forward_options_box.h"
 #include "ui/effects/animations.h"
 #include "ui/effects/round_checkbox.h"
 #include "mtproto/sender.h"
+
+class History;
 
 namespace style {
 struct MultiSelect;
@@ -21,11 +24,11 @@ struct PeerList;
 } // namespace style
 
 namespace SendMenu {
-enum class Type;
+struct Details;
 } // namespace SendMenu
 
 namespace Window {
-class SessionNavigation;
+class SessionController;
 } // namespace Window
 
 namespace Api {
@@ -34,6 +37,7 @@ struct SendOptions;
 
 namespace Main {
 class Session;
+class SessionShow;
 } // namespace Main
 
 namespace Dialogs {
@@ -41,44 +45,83 @@ class Row;
 class IndexedList;
 } // namespace Dialogs
 
+namespace Data {
+enum class ForwardOptions;
+class Thread;
+} // namespace Data
+
 namespace Ui {
 class MultiSelect;
 class InputField;
 struct ScrollToRequest;
 template <typename Widget>
 class SlideWrap;
+class PopupMenu;
 } // namespace Ui
 
-QString AppendShareGameScoreUrl(
-	not_null<Main::Session*> session,
+class ShareBox;
+
+struct ShareBoxStyleOverrides {
+	const style::MultiSelect *multiSelect = nullptr;
+	const style::InputField *comment = nullptr;
+	const style::PeerList *peerList = nullptr;
+	const style::InputField *label = nullptr;
+	std::shared_ptr<HistoryView::ScheduleBoxStyleArgs> scheduleBox;
+};
+[[nodiscard]] ShareBoxStyleOverrides DarkShareBoxStyle();
+
+void FastShareMessage(
+	std::shared_ptr<Main::SessionShow> show,
+	not_null<HistoryItem*> item,
+	ShareBoxStyleOverrides st = {});
+void FastShareMessage(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item,
+	ShareBoxStyleOverrides st = {});
+void FastShareLink(
+	not_null<Window::SessionController*> controller,
 	const QString &url,
-	const FullMsgId &fullId);
-void ShareGameScoreByHash(
-	not_null<Main::Session*> session,
-	const QString &hash);
+	ShareBoxStyleOverrides st = {});
+void FastShareLink(
+	std::shared_ptr<Main::SessionShow> show,
+	const QString &url,
+	ShareBoxStyleOverrides st = {});
+
+struct RecipientPremiumRequiredError;
+[[nodiscard]] auto SharePremiumRequiredError()
+-> Fn<RecipientPremiumRequiredError(not_null<UserData*>)>;
 
 class ShareBox final : public Ui::BoxContent {
 public:
 	using CopyCallback = Fn<void()>;
 	using SubmitCallback = Fn<void(
-		std::vector<not_null<PeerData*>>&&,
+		std::vector<not_null<Data::Thread*>>&&,
 		TextWithTags&&,
-		Api::SendOptions)>;
-	using FilterCallback = Fn<bool(PeerData*)>;
+		Api::SendOptions,
+		Data::ForwardOptions)>;
+	using FilterCallback = Fn<bool(not_null<Data::Thread*>)>;
+
+	[[nodiscard]] static SubmitCallback DefaultForwardCallback(
+		std::shared_ptr<Ui::Show> show,
+		not_null<History*> history,
+		MessageIdsList msgIds);
 
 	struct Descriptor {
 		not_null<Main::Session*> session;
 		CopyCallback copyCallback;
 		SubmitCallback submitCallback;
 		FilterCallback filterCallback;
-		Window::SessionNavigation *navigation = nullptr;
-		Fn<void(not_null<Ui::InputField*>)> initSpellchecker;
-		Fn<void(not_null<Ui::InputField*>)> initEditLink;
 		object_ptr<Ui::RpWidget> bottomWidget = { nullptr };
 		rpl::producer<QString> copyLinkText;
-		const style::MultiSelect *stMultiSelect = nullptr;
-		const style::InputField *stComment = nullptr;
-		const style::PeerList *st = nullptr;
+		ShareBoxStyleOverrides st;
+		struct {
+			int sendersCount = 0;
+			int captionsCount = 0;
+			bool show = false;
+		} forwardOptions;
+
+		using PremiumRequiredError = RecipientPremiumRequiredError;
+		Fn<PremiumRequiredError(not_null<UserData*>)> premiumRequiredError;
 	};
 	ShareBox(QWidget*, Descriptor &&descriptor);
 
@@ -94,12 +137,10 @@ private:
 	void scrollAnimationCallback();
 
 	void submit(Api::SendOptions options);
-	void submitSilent();
-	void submitScheduled();
-	void copyLink();
+	void copyLink() const;
 	bool searchByUsername(bool useCache = false);
 
-	SendMenu::Type sendMenuType() const;
+	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
 
 	void scrollTo(Ui::ScrollToRequest request);
 	void needSearchByUsername();
@@ -111,13 +152,15 @@ private:
 	int contentHeight() const;
 	void updateScrollSkips();
 
-	void addPeerToMultiSelect(PeerData *peer, bool skipAnimation = false);
-	void innerSelectedChanged(PeerData *peer, bool checked);
+	void addPeerToMultiSelect(not_null<Data::Thread*> thread);
+	void innerSelectedChanged(not_null<Data::Thread*> thread, bool checked);
 
 	void peopleDone(
 		const MTPcontacts_Found &result,
 		mtpRequestId requestId);
 	void peopleFail(const MTP::Error &error, mtpRequestId requestId);
+
+	void showMenu(not_null<Ui::RpWidget*> parent);
 
 	Descriptor _descriptor;
 	MTP::Sender _api;
@@ -125,6 +168,9 @@ private:
 	object_ptr<Ui::MultiSelect> _select;
 	object_ptr<Ui::SlideWrap<Ui::InputField>> _comment;
 	object_ptr<Ui::RpWidget> _bottomWidget;
+
+	base::unique_qptr<Ui::PopupMenu> _menu;
+	Ui::ForwardOptions _forwardOptions;
 
 	class Inner;
 	QPointer<Inner> _inner;
@@ -136,6 +182,8 @@ private:
 	QString _peopleQuery;
 	bool _peopleFull = false;
 	mtpRequestId _peopleRequest = 0;
+
+	RpWidget *_chatsFilters = nullptr;
 
 	using PeopleCache = QMap<QString, MTPcontacts_Found>;
 	PeopleCache _peopleCache;

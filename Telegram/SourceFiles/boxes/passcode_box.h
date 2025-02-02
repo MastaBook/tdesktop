@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
+#include "ui/layers/box_content.h"
 #include "mtproto/sender.h"
 #include "core/core_cloud_password.h"
 
@@ -36,18 +36,25 @@ public:
 	struct CloudFields {
 		static CloudFields From(const Core::CloudPasswordState &current);
 
-		Core::CloudPasswordCheckRequest curRequest;
-		Core::CloudPasswordAlgo newAlgo;
+		struct Mtp {
+			Core::CloudPasswordCheckRequest curRequest;
+			Core::CloudPasswordAlgo newAlgo;
+			Core::SecureSecretAlgo newSecureSecretAlgo;
+		};
+		Mtp mtp;
+		bool hasPassword = false;
 		bool hasRecovery = false;
 		QString fromRecoveryCode;
 		bool notEmptyPassport = false;
 		QString hint;
-		Core::SecureSecretAlgo newSecureSecretAlgo;
 		bool turningOff = false;
 		TimeId pendingResetDate = 0;
 
 		// Check cloud password for some action.
-		Fn<void(const Core::CloudPasswordResult &)> customCheckCallback;
+		using CustomCheck = Fn<void(
+			const Core::CloudPasswordResult &,
+			QPointer<PasscodeBox>)>;
+		CustomCheck customCheckCallback;
 		rpl::producer<QString> customTitle;
 		std::optional<QString> customDescription;
 		rpl::producer<QString> customSubmitButton;
@@ -86,7 +93,6 @@ private:
 	void closeReplacedBy();
 	void oldChanged();
 	void newChanged();
-	void emailChanged();
 	void save(bool force = false);
 	void badOldPasscode();
 	void recoverByEmail();
@@ -98,7 +104,6 @@ private:
 	void recoverPasswordDone(
 		const QByteArray &newPasswordBytes,
 		const MTPauth_Authorization &result);
-	void setPasswordFail(const MTP::Error &error);
 	void setPasswordFail(const QString &type);
 	void setPasswordFail(
 		const QByteArray &newPasswordBytes,
@@ -149,6 +154,7 @@ private:
 
 	Main::Session *_session = nullptr;
 	MTP::Sender _api;
+	const int _textWidth;
 
 	QString _pattern;
 
@@ -214,17 +220,18 @@ private:
 	void proceedToChange(const QString &code);
 	void checkSubmitFail(const MTP::Error &error);
 	void setError(const QString &error);
+	void updateHeight();
 
 	Main::Session *_session = nullptr;
 	MTP::Sender _api;
+	const int _textWidth;
 	mtpRequestId _submitRequest = 0;
-
-	QString _pattern;
 
 	PasscodeBox::CloudFields _cloudFields;
 
 	object_ptr<Ui::InputField> _recoverCode;
 	object_ptr<Ui::LinkButton> _noEmailAccess;
+	object_ptr<Ui::FlatLabel> _patternLabel;
 	Fn<void()> _closeParent;
 
 	QString _error;
@@ -244,6 +251,6 @@ struct RecoveryEmailValidation {
 	const QString &pattern);
 
 [[nodiscard]] object_ptr<Ui::GenericBox> PrePasswordErrorBox(
-	const MTP::Error &error,
+	const QString &error,
 	not_null<Main::Session*> session,
 	TextWithEntities &&about);

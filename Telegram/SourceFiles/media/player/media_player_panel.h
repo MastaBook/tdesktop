@@ -44,7 +44,7 @@ public:
 protected:
 	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 
 private:
@@ -78,7 +78,7 @@ private:
 		return width() - contentLeft() - contentRight();
 	}
 	int contentHeight() const {
-		return height() - contentTop() - contentBottom();;
+		return height() - contentTop() - contentBottom();
 	}
 
 	void startAnimation();

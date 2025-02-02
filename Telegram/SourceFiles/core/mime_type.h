@@ -11,6 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QMimeType>
+#include <QtGui/QImage>
+
+class QMimeData;
 
 namespace Core {
 
@@ -46,5 +49,41 @@ private:
 [[nodiscard]] bool IsMimeAcceptedForPhotoVideoAlbum(const QString &mime);
 
 [[nodiscard]] bool FileIsImage(const QString &name, const QString &mime);
+
+[[nodiscard]] std::shared_ptr<QMimeData> ShareMimeMediaData(
+	not_null<const QMimeData*> original);
+
+struct MimeImageData {
+	QImage image;
+	QByteArray content;
+
+	[[nodiscard]] bool empty() const {
+		return image.isNull();
+	}
+	explicit operator bool() const {
+		return !empty();
+	}
+};
+[[nodiscard]] MimeImageData ReadMimeImage(not_null<const QMimeData*> data);
+[[nodiscard]] QString ReadMimeText(not_null<const QMimeData*> data);
+[[nodiscard]] QList<QUrl> ReadMimeUrls(not_null<const QMimeData*> data);
+[[nodiscard]] bool CanSendFiles(not_null<const QMimeData*> data);
+
+enum class NameType : uchar {
+	Unknown,
+	Executable,
+	Image,
+	Video,
+	Audio,
+	Document,
+	Archive,
+	ThemeFile,
+	OtherBenign,
+};
+
+[[nodiscard]] QString FileExtension(const QString &filepath);
+[[nodiscard]] NameType DetectNameType(const QString &filepath);
+[[nodiscard]] bool NameTypeAllowsThumbnail(NameType type);
+[[nodiscard]] bool IsIpRevealingPath(const QString &filepath);
 
 } // namespace Core

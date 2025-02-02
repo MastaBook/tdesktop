@@ -11,6 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/shadow.h"
 
+namespace Data {
+class ForumTopic;
+} // namespace Data
+
 namespace Window {
 class SessionController;
 } // namespace Window
@@ -18,70 +22,85 @@ class SessionController;
 namespace Ui {
 class FlatButton;
 class IconButton;
+class FlatLabel;
 } // namespace Ui
 
 namespace HistoryView {
+
+class SlidingBar final {
+public:
+	SlidingBar(
+		not_null<Ui::RpWidget*> parent,
+		object_ptr<Ui::RpWidget> wrapped);
+
+	void setVisible(bool visible);
+	void raise();
+
+	void move(int x, int y);
+	[[nodiscard]] int height() const;
+	[[nodiscard]] rpl::producer<int> heightValue() const;
+	void toggleContent(bool visible);
+
+	void show() {
+		setVisible(true);
+	}
+	void hide() {
+		setVisible(false);
+	}
+
+	[[nodiscard]] rpl::lifetime &lifetime() {
+		return _lifetime;
+	}
+
+private:
+	void setup(not_null<Ui::RpWidget*> parent);
+
+	Ui::SlideWrap<Ui::RpWidget> _wrapped;
+	Ui::PlainShadow _shadow;
+	bool _shown = false;
+	bool _contentShown = false;
+
+	rpl::lifetime _lifetime;
+
+};
 
 class ContactStatus final {
 public:
 	ContactStatus(
 		not_null<Window::SessionController*> controller,
 		not_null<Ui::RpWidget*> parent,
-		not_null<PeerData*> peer);
+		not_null<PeerData*> peer,
+		bool showInForum);
 
 	void show();
-	void raise();
+	void hide();
 
-	void move(int x, int y);
-	int height() const;
-	rpl::producer<int> heightValue() const;
-
-	rpl::lifetime &lifetime() {
-		return _lifetime;
+	[[nodiscard]] SlidingBar &bar() {
+		return _bar;
 	}
 
 private:
-	enum class State {
-		None,
-		ReportSpam,
-		Add,
-		AddOrBlock,
-		UnarchiveOrBlock,
-		UnarchiveOrReport,
-		SharePhoneNumber,
+	class Bar;
+	class BgButton;
+
+	struct State {
+		enum class Type {
+			None,
+			ReportSpam,
+			Add,
+			AddOrBlock,
+			UnarchiveOrBlock,
+			UnarchiveOrReport,
+			SharePhoneNumber,
+			RequestChatInfo,
+		};
+		Type type = Type::None;
+		QString requestChatName;
+		bool requestChatIsBroadcast = false;
+		TimeId requestDate = 0;
 	};
 
-	class Bar : public Ui::RpWidget {
-	public:
-		Bar(QWidget *parent, const QString &name);
-
-		void showState(State state);
-
-		rpl::producer<> unarchiveClicks() const;
-		rpl::producer<> addClicks() const;
-		rpl::producer<> blockClicks() const;
-		rpl::producer<> shareClicks() const;
-		rpl::producer<> reportClicks() const;
-		rpl::producer<> closeClicks() const;
-
-	protected:
-		void resizeEvent(QResizeEvent *e) override;
-
-	private:
-		void updateButtonsGeometry();
-
-		QString _name;
-		object_ptr<Ui::FlatButton> _add;
-		object_ptr<Ui::FlatButton> _unarchive;
-		object_ptr<Ui::FlatButton> _block;
-		object_ptr<Ui::FlatButton> _share;
-		object_ptr<Ui::FlatButton> _report;
-		object_ptr<Ui::IconButton> _close;
-
-	};
-
-	void setupWidgets(not_null<Ui::RpWidget*> parent);
-	void setupState(not_null<PeerData*> peer);
+	void setupState(not_null<PeerData*> peer, bool showInForum);
 	void setupHandlers(not_null<PeerData*> peer);
 	void setupAddHandler(not_null<UserData*> user);
 	void setupBlockHandler(not_null<UserData*> user);
@@ -89,16 +108,76 @@ private:
 	void setupUnarchiveHandler(not_null<PeerData*> peer);
 	void setupReportHandler(not_null<PeerData*> peer);
 	void setupCloseHandler(not_null<PeerData*> peer);
+	void setupRequestInfoHandler(not_null<PeerData*> peer);
+	void setupEmojiStatusHandler(not_null<PeerData*> peer);
 
 	static rpl::producer<State> PeerState(not_null<PeerData*> peer);
 
 	const not_null<Window::SessionController*> _controller;
-	State _state = State::None;
-	Ui::SlideWrap<Bar> _bar;
-	Ui::PlainShadow _shadow;
+	State _state;
+	TextWithEntities _status;
+	Fn<std::any(Fn<void()> customEmojiRepaint)> _context;
+	QPointer<Bar> _inner;
+	SlidingBar _bar;
+	bool _hiddenByForum = false;
 	bool _shown = false;
 
-	rpl::lifetime _lifetime;
+};
+
+class BusinessBotStatus final {
+public:
+	BusinessBotStatus(
+		not_null<Window::SessionController*> controller,
+		not_null<Ui::RpWidget*> parent,
+		not_null<PeerData*> peer);
+
+	void show();
+	void hide();
+
+	[[nodiscard]] SlidingBar &bar() {
+		return _bar;
+	}
+
+private:
+	class Bar;
+
+	struct State {
+		UserData *bot = nullptr;
+		QString manageUrl;
+		bool canReply = false;
+		bool paused = false;
+	};
+
+	void setupState(not_null<PeerData*> peer);
+	void setupHandlers(not_null<PeerData*> peer);
+
+	static rpl::producer<State> PeerState(not_null<PeerData*> peer);
+
+	const not_null<Window::SessionController*> _controller;
+	State _state;
+	QPointer<Bar> _inner;
+	SlidingBar _bar;
+	bool _shown = false;
+
+};
+
+class TopicReopenBar final {
+public:
+	TopicReopenBar(
+		not_null<Ui::RpWidget*> parent,
+		not_null<Data::ForumTopic*> topic);
+
+	[[nodiscard]] SlidingBar &bar() {
+		return _bar;
+	}
+
+private:
+	void setupState();
+	void setupHandler();
+
+	const not_null<Data::ForumTopic*> _topic;
+	QPointer<Ui::FlatButton> _reopen;
+	SlidingBar _bar;
 
 };
 

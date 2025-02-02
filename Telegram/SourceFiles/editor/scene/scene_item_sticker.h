@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "editor/scene/scene_item_base.h"
+#include "media/clip/media_clip_reader.h"
 
 namespace Data {
 class DocumentMedia;
@@ -30,22 +31,25 @@ public:
 		QPainter *p,
 		const QStyleOptionGraphicsItem *option,
 		QWidget *widget) override;
-	MTPInputDocument sticker() const;
+	[[nodiscard]] not_null<DocumentData*> sticker() const;
 	int type() const override;
+
 protected:
 	void performFlip() override;
 	std::shared_ptr<ItemBase> duplicate(ItemBase::Data data) const override;
+
 private:
 	const not_null<DocumentData*> _document;
 	const std::shared_ptr<::Data::DocumentMedia> _mediaView;
 
-	void updatePixmap(QPixmap &&pixmap);
+	void updatePixmap(QImage &&image);
 
 	struct {
 		std::unique_ptr<Lottie::SinglePlayer> player;
 		rpl::lifetime lifetime;
 	} _lottie;
-	QPixmap _pixmap;
+	::Media::Clip::ReaderPointer _webm;
+	QImage _image;
 
 	rpl::lifetime _loadingLifetime;
 

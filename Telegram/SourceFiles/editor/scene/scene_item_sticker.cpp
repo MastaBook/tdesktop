@@ -34,37 +34,53 @@ ItemSticker::ItemSticker(
 	}
 	const auto updateThumbnail = [=] {
 		const auto guard = gsl::finally([&] {
-			setAspectRatio(_pixmap.isNull()
-				? 1.0
-				: (_pixmap.height() / float64(_pixmap.width())));
+			if (_image.isNull()) {
+				setAspectRatio(1.);
+			}
 		});
-		if (stickerData->animated) {
+		if (stickerData->isLottie()) {
 			_lottie.player = ChatHelpers::LottiePlayerFromDocument(
 				_mediaView.get(),
 				ChatHelpers::StickerLottieSize::MessageHistory,
 				QSize(kStickerSideSize, kStickerSideSize)
-					* cIntRetinaFactor(),
+					* style::DevicePixelRatio(),
 				Lottie::Quality::High);
 			_lottie.player->updates(
 			) | rpl::start_with_next([=] {
-				updatePixmap(Ui::PixmapFromImage(
-					_lottie.player->frame()));
+				updatePixmap(_lottie.player->frame());
 				_lottie.player = nullptr;
 				_lottie.lifetime.destroy();
 				update();
 			}, _lottie.lifetime);
+			return true;
+		} else if (stickerData->isWebm()
+			&& !_document->dimensions.isEmpty()) {
+			const auto callback = [=](::Media::Clip::Notification) {
+				const auto size = _document->dimensions;
+				if (_webm && _webm->ready() && !_webm->started()) {
+					_webm->start({ .frame = size, .keepAlpha = true });
+				}
+				if (_webm && _webm->started()) {
+					updatePixmap(_webm->current(
+						{ .frame = size, .keepAlpha = true },
+						0));
+					_webm = nullptr;
+				}
+			};
+			_webm = ::Media::Clip::MakeReader(
+				_mediaView->owner()->location(),
+				_mediaView->bytes(),
+				callback);
 			return true;
 		}
 		const auto sticker = _mediaView->getStickerLarge();
 		if (!sticker) {
 			return false;
 		}
-		auto pixmap = sticker->pixNoCache(
-			sticker->width() * cIntRetinaFactor(),
-			sticker->height() * cIntRetinaFactor(),
-			Images::Option::Smooth);
-		pixmap.setDevicePixelRatio(cRetinaFactor());
-		updatePixmap(std::move(pixmap));
+		const auto ratio = style::DevicePixelRatio();
+		auto pixmap = sticker->pixNoCache(sticker->size() * ratio);
+		pixmap.setDevicePixelRatio(ratio);
+		updatePixmap(pixmap.toImage());
 		return true;
 	};
 	if (!updateThumbnail()) {
@@ -78,12 +94,15 @@ ItemSticker::ItemSticker(
 	}
 }
 
-void ItemSticker::updatePixmap(QPixmap &&pixmap) {
-	_pixmap = std::move(pixmap);
+void ItemSticker::updatePixmap(QImage &&image) {
+	_image = std::move(image);
 	if (flipped()) {
 		performFlip();
 	} else {
 		update();
+	}
+	if (!_image.isNull()) {
+		setAspectRatio(_image.height() / float64(_image.width()));
 	}
 }
 
@@ -91,12 +110,18 @@ void ItemSticker::paint(
 		QPainter *p,
 		const QStyleOptionGraphicsItem *option,
 		QWidget *w) {
-	p->drawPixmap(contentRect().toRect(), _pixmap);
+	const auto rect = contentRect();
+	const auto imageSize = QSizeF(_image.size() / style::DevicePixelRatio())
+		.scaled(rect.size(), Qt::KeepAspectRatio);
+	const auto resultRect = QRectF(rect.topLeft(), imageSize).translated(
+		(rect.width() - imageSize.width()) / 2.,
+		(rect.height() - imageSize.height()) / 2.);
+	p->drawImage(resultRect, _image);
 	ItemBase::paint(p, option, w);
 }
 
-MTPInputDocument ItemSticker::sticker() const {
-	return _document->mtpInput();
+not_null<DocumentData*> ItemSticker::sticker() const {
+	return _document;
 }
 
 int ItemSticker::type() const {
@@ -104,7 +129,7 @@ int ItemSticker::type() const {
 }
 
 void ItemSticker::performFlip() {
-	_pixmap = _pixmap.transformed(QTransform().scale(-1, 1));
+	_image = _image.transformed(QTransform().scale(-1, 1));
 	update();
 }
 

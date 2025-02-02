@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "base/timer.h"
 #include "base/object_ptr.h"
+#include "base/unique_qptr.h"
 #include "calls/calls_call.h"
 #include "calls/group/ui/desktop_capture_choose_source.h"
 #include "ui/effects/animations.h"
@@ -18,9 +19,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class Image;
 
+namespace base {
+class PowerSaveBlocker;
+} // namespace base
+
 namespace Data {
 class PhotoMedia;
-class CloudImageView;
 } // namespace Data
 
 namespace Ui {
@@ -33,11 +37,12 @@ class FadeWrap;
 template <typename Widget>
 class PaddingWrap;
 class RpWindow;
+class PopupMenu;
 namespace GL {
 enum class Backend;
 } // namespace GL
 namespace Platform {
-class TitleControls;
+struct SeparateTitleControls;
 } // namespace Platform
 } // namespace Ui
 
@@ -51,15 +56,18 @@ namespace Calls {
 class Userpic;
 class SignalBars;
 class VideoBubble;
+struct DeviceSelection;
 
 class Panel final : private Group::Ui::DesktopCapture::ChooseSourceDelegate {
 public:
 	Panel(not_null<Call*> call);
 	~Panel();
 
+	[[nodiscard]] bool isVisible() const;
 	[[nodiscard]] bool isActive() const;
 	void showAndActivate();
 	void minimize();
+	void toggleFullScreen();
 	void replaceCall(not_null<Call*> call);
 	void closeBeforeDestroy();
 
@@ -73,6 +81,8 @@ public:
 		bool withAudio) override;
 	void chooseSourceStop() override;
 
+	[[nodiscard]] rpl::producer<bool> startOutgoingRequests() const;
+
 	[[nodiscard]] rpl::lifetime &lifetime();
 
 private:
@@ -83,6 +93,7 @@ private:
 		Answer,
 		Hangup,
 		Redial,
+		StartCall,
 	};
 
 	[[nodiscard]] not_null<Ui::RpWindow*> window() const;
@@ -95,9 +106,10 @@ private:
 	void initControls();
 	void reinitWithCall(Call *call);
 	void initLayout();
+	void initMediaDeviceToggles();
 	void initGeometry();
 
-	void handleClose();
+	[[nodiscard]] bool handleClose() const;
 
 	void updateControlsGeometry();
 	void updateHangupGeometry();
@@ -113,7 +125,13 @@ private:
 	void refreshOutgoingPreviewInBody(State state);
 	void toggleFullScreen(bool fullscreen);
 	void createRemoteAudioMute();
+	void createRemoteLowBattery();
+	void showRemoteLowBattery();
 	void refreshAnswerHangupRedialLabel();
+
+	void showDevicesMenu(
+		not_null<QWidget*> button,
+		std::vector<DeviceSelection> types);
 
 	[[nodiscard]] QRect incomingFrameGeometry() const;
 	[[nodiscard]] QRect outgoingFrameGeometry() const;
@@ -126,8 +144,10 @@ private:
 	std::unique_ptr<Incoming> _incoming;
 
 #ifndef Q_OS_MAC
-	std::unique_ptr<Ui::Platform::TitleControls> _controls;
+	std::unique_ptr<Ui::Platform::SeparateTitleControls> _controls;
 #endif // !Q_OS_MAC
+
+	std::unique_ptr<base::PowerSaveBlocker> _powerSaveBlocker;
 
 	QSize _incomingFrameSize;
 
@@ -141,21 +161,30 @@ private:
 	bool _outgoingPreviewInBody = false;
 	std::optional<AnswerHangupRedialState> _answerHangupRedialState;
 	Ui::Animations::Simple _hangupShownProgress;
-	object_ptr<Ui::CallButton> _screencast;
+	object_ptr<Ui::FadeWrap<Ui::CallButton>> _screencast;
 	object_ptr<Ui::CallButton> _camera;
-	object_ptr<Ui::CallButton> _mute;
+	Ui::CallButton *_cameraDeviceToggle = nullptr;
+	base::unique_qptr<Ui::CallButton> _startVideo;
+	object_ptr<Ui::FadeWrap<Ui::CallButton>> _mute;
+	Ui::CallButton *_audioDeviceToggle = nullptr;
 	object_ptr<Ui::FlatLabel> _name;
 	object_ptr<Ui::FlatLabel> _status;
 	object_ptr<Ui::RpWidget> _fingerprint = { nullptr };
 	object_ptr<Ui::PaddingWrap<Ui::FlatLabel>> _remoteAudioMute = { nullptr };
+	object_ptr<Ui::PaddingWrap<Ui::FlatLabel>> _remoteLowBattery
+		= { nullptr };
 	std::unique_ptr<Userpic> _userpic;
 	std::unique_ptr<VideoBubble> _outgoingVideoBubble;
 	QPixmap _bottomShadow;
 	int _bodyTop = 0;
 	int _buttonsTop = 0;
 
+	base::unique_qptr<Ui::PopupMenu> _devicesMenu;
+
 	base::Timer _updateDurationTimer;
 	base::Timer _updateOuterRippleTimer;
+
+	rpl::event_stream<bool> _startOutgoingRequests;
 
 };
 

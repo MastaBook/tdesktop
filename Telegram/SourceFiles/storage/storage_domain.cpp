@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_config.h"
 #include "main/main_domain.h"
 #include "main/main_account.h"
+#include "base/random.h"
 
 namespace Storage {
 namespace {
@@ -19,7 +20,7 @@ namespace {
 using namespace details;
 
 [[nodiscard]] QString BaseGlobalPath() {
-	return cWorkingDir() + qsl("tdata/");
+	return cWorkingDir() + u"tdata/"_q;
 }
 
 [[nodiscard]] QString ComputeKeyName(const QString &dataName) {
@@ -94,8 +95,8 @@ void Domain::generateLocalKey() {
 
 	auto pass = QByteArray(MTP::AuthKey::kSize, Qt::Uninitialized);
 	auto salt = QByteArray(LocalEncryptSaltSize, Qt::Uninitialized);
-	memset_rand(pass.data(), pass.size());
-	memset_rand(salt.data(), salt.size());
+	base::RandomFill(pass.data(), pass.size());
+	base::RandomFill(salt.data(), salt.size());
 	_localKey = CreateLocalKey(pass, salt);
 
 	encryptLocalKey(QByteArray());
@@ -103,7 +104,7 @@ void Domain::generateLocalKey() {
 
 void Domain::encryptLocalKey(const QByteArray &passcode) {
 	_passcodeKeySalt.resize(LocalEncryptSaltSize);
-	memset_rand(_passcodeKeySalt.data(), _passcodeKeySalt.size());
+	base::RandomFill(_passcodeKeySalt.data(), _passcodeKeySalt.size());
 	_passcodeKey = CreateLocalKey(passcode, _passcodeKeySalt);
 
 	EncryptedDescriptor passKeyData(MTP::AuthKey::kSize);
@@ -159,7 +160,7 @@ Domain::StartModernResult Domain::startModern(
 	LOG(("App Info: reading encrypted info..."));
 	auto count = qint32();
 	info.stream >> count;
-	if (count <= 0 || count > Main::Domain::kMaxAccounts) {
+	if (count <= 0 || count > Main::Domain::kPremiumMaxAccounts) {
 		LOG(("App Error: bad accounts count: %1").arg(count));
 		return StartModernResult::Failed;
 	}
@@ -173,7 +174,7 @@ Domain::StartModernResult Domain::startModern(
 		auto index = qint32();
 		info.stream >> index;
 		if (index >= 0
-			&& index < Main::Domain::kMaxAccounts
+			&& index < Main::Domain::kPremiumMaxAccounts
 			&& tried.emplace(index).second) {
 			auto account = std::make_unique<Main::Account>(
 				_owner,
@@ -265,10 +266,6 @@ int Domain::oldVersion() const {
 
 void Domain::clearOldVersion() {
 	_oldVersion = 0;
-}
-
-QString Domain::webviewDataPath() const {
-	return BaseGlobalPath() + "webview";
 }
 
 rpl::producer<> Domain::localPasscodeChanged() const {

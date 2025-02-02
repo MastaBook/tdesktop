@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/config_loader.h"
 
-#include "base/openssl_help.h"
+#include "base/random.h"
 #include "mtproto/special_config_request.h"
 #include "mtproto/facade.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -116,7 +116,7 @@ void ConfigLoader::enumerate() {
 }
 
 void ConfigLoader::refreshSpecialLoader() {
-	if (_proxyEnabled) {
+	if (_proxyEnabled || _instance->isKeysDestroyer()) {
 		_specialLoader.reset();
 		return;
 	}
@@ -136,6 +136,7 @@ void ConfigLoader::setPhone(const QString &phone) {
 }
 
 void ConfigLoader::createSpecialLoader() {
+	const auto testMode = _instance->isTestMode();
 	_triedSpecialEndpoints.clear();
 	_specialLoader = std::make_unique<SpecialConfigRequest>([=](
 			DcId dcId,
@@ -147,7 +148,7 @@ void ConfigLoader::createSpecialLoader() {
 		} else {
 			addSpecialEndpoint(dcId, ip, port, secret);
 		}
-	}, _instance->configValues().txtDomainString, _phone);
+	}, testMode, _instance->configValues().txtDomainString, _phone);
 }
 
 void ConfigLoader::addSpecialEndpoint(
@@ -185,8 +186,7 @@ void ConfigLoader::sendSpecialRequest() {
 	}
 
 	const auto weak = base::make_weak(this);
-	const auto index = openssl::RandomValue<uint32>()
-		% _specialEndpoints.size();
+	const auto index = base::RandomValue<uint32>() % _specialEndpoints.size();
 	const auto endpoint = _specialEndpoints.begin() + index;
 	_specialEnumCurrent = specialToRealDcId(endpoint->dcId);
 

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/timer.h"
 #include "media/streaming/media_streaming_loader.h"
 #include "mtproto/sender.h"
 #include "data/data_file_origin.h"
@@ -20,14 +21,14 @@ public:
 	LoaderMtproto(
 		not_null<Storage::DownloadManagerMtproto*> owner,
 		const StorageFileLocation &location,
-		int size,
+		int64 size,
 		Data::FileOrigin origin);
 
 	[[nodiscard]] Storage::Cache::Key baseCacheKey() const override;
-	[[nodiscard]] int size() const override;
+	[[nodiscard]] int64 size() const override;
 
-	void load(int offset) override;
-	void cancel(int offset) override;
+	void load(int64 offset) override;
+	void cancel(int64 offset) override;
 	void resetPriorities() override;
 	void setPriority(int priority) override;
 	void stop() override;
@@ -36,27 +37,41 @@ public:
 
 	// Parts will be sent from the main thread.
 	[[nodiscard]] rpl::producer<LoadedPart> parts() const override;
+	[[nodiscard]] rpl::producer<SpeedEstimate> speedEstimate() const override;
 
 	void attachDownloader(
 		not_null<Storage::StreamedFileDownloader*> downloader) override;
 	void clearAttachedDownloader() override;
 
 private:
+	struct StatsEntry {
+		crl::time start = 0;
+		crl::time end = 0;
+		int64 offset = 0;
+	};
+
 	bool readyToRequest() const override;
-	int takeNextRequestOffset() override;
-	bool feedPart(int offset, const QByteArray &bytes) override;
+	int64 takeNextRequestOffset() override;
+	bool feedPart(int64 offset, const QByteArray &bytes) override;
 	void cancelOnFail() override;
 
-	void cancelForOffset(int offset);
+	void cancelForOffset(int64 offset);
 	void addToQueueWithPriority();
 
-	const int _size = 0;
+	void checkStats();
+
+	const int64 _size = 0;
 	int _priority = 0;
 
 	MTP::Sender _api;
 
 	PriorityQueue _requested;
 	rpl::event_stream<LoadedPart> _parts;
+	rpl::event_stream<SpeedEstimate> _speedEstimate;
+
+	std::vector<StatsEntry> _stats;
+	crl::time _firstRequestStart = 0;
+	base::Timer _statsTimer;
 
 	Storage::StreamedFileDownloader *_downloader = nullptr;
 

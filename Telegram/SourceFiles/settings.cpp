@@ -18,7 +18,7 @@ QByteArray gAlphaPrivateKey;
 
 bool gManyInstance = false;
 QString gKeyFile;
-QString gWorkingDir, gExeDir, gExeName;
+QString gWorkingDir;
 
 QStringList gSendPaths;
 QString gStartUrl;
@@ -29,12 +29,11 @@ bool gStartMinimized = false;
 bool gStartInTray = false;
 bool gAutoStart = false;
 bool gSendToMenu = false;
-bool gUseExternalVideoPlayer = false;
-bool gUseFreeType = false;
 bool gAutoUpdate = true;
 LaunchMode gLaunchMode = LaunchModeNormal;
 bool gSeenTrayTooltip = false;
 bool gRestartingUpdate = false, gRestarting = false, gRestartingToSettings = false, gWriteProtected = false;
+bool gQuit = false;
 int32 gLastUpdateCheck = 0;
 bool gNoStartUpdate = false;
 bool gStartToSettings = false;
@@ -45,8 +44,6 @@ uint32 gConnectionsInSession = 1;
 QByteArray gLocalSalt;
 int gScreenScale = style::kScaleAuto;
 int gConfigScale = style::kScaleAuto;
-
-QString gTimeFormat = qsl("hh:mm");
 
 RecentStickerPreload gRecentStickersPreload;
 RecentStickerPack gRecentStickers;

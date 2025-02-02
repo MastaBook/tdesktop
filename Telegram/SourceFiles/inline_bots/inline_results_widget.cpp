@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/scroll_area.h"
 #include "ui/image/image_prepare.h"
 #include "ui/cached_round_corners.h"
+#include "ui/ui_utility.h"
 #include "styles/style_chat_helpers.h"
 
 namespace InlineBots {
@@ -36,6 +37,9 @@ Widget::Widget(
 , _contentMaxHeight(st::emojiPanMaxHeight)
 , _contentHeight(_contentMaxHeight)
 , _scroll(this, st::inlineBotsScroll)
+, _innerRounding(Ui::PrepareCornerPixmaps(
+	ImageRoundRadius::Small,
+	st::emojiPanBg))
 , _inlineRequestTimer([=] { onInlineRequest(); }) {
 	resize(QRect(0, 0, st::emojiPanWidth, _contentHeight).marginsAdded(innerPadding()).size());
 	_width = width();
@@ -48,16 +52,22 @@ Widget::Widget(
 
 	_inner->moveToLeft(0, 0, _scroll->width());
 
-	connect(
-		_scroll,
-		&Ui::ScrollArea::scrolled,
-		this,
-		&InlineBots::Layout::Widget::onScroll);
+	_scroll->scrolls(
+	) | rpl::start_with_next([=] {
+		onScroll();
+	}, lifetime());
 
 	_inner->inlineRowsCleared(
 	) | rpl::start_with_next([=] {
 		hideAnimated();
 		_inner->clearInlineRowsPanel();
+	}, lifetime());
+
+	style::PaletteChanged(
+	) | rpl::start_with_next([=] {
+		_innerRounding = Ui::PrepareCornerPixmaps(
+			ImageRoundRadius::Small,
+			st::emojiPanBg);
 	}, lifetime());
 
 	macWindowDeactivateEvents(
@@ -120,7 +130,7 @@ void Widget::updateContentHeight() {
 }
 
 void Widget::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	auto opacityAnimating = _a_opacity.animating();
 
@@ -149,9 +159,19 @@ void Widget::paintEvent(QPaintEvent *e) {
 	}
 }
 
-void Widget::paintContent(Painter &p) {
+void Widget::paintContent(QPainter &p) {
 	auto inner = innerRect();
-	Ui::FillRoundRect(p, inner, st::emojiPanBg, ImageRoundRadius::Small, RectPart::FullTop | RectPart::FullBottom);
+	const auto radius = st::roundRadiusSmall;
+
+	const auto top = Ui::CornersPixmaps{
+		.p = { _innerRounding.p[0], _innerRounding.p[1], QPixmap(), QPixmap() },
+	};
+	Ui::FillRoundRect(p, inner.x(), inner.y(), inner.width(), radius, st::emojiPanBg, top);
+
+	const auto bottom = Ui::CornersPixmaps{
+		.p = { QPixmap(), QPixmap(), _innerRounding.p[2], _innerRounding.p[3] },
+	};
+	Ui::FillRoundRect(p, inner.x(), inner.y() + inner.height() - radius, inner.width(), radius, st::emojiPanBg, bottom);
 
 	auto horizontal = horizontalRect();
 	auto sidesTop = horizontal.y();
@@ -217,7 +237,11 @@ void Widget::startShowAnimation() {
 
 		_showAnimation = std::make_unique<Ui::PanelAnimation>(st::emojiPanAnimation, Ui::PanelAnimation::Origin::BottomLeft);
 		auto inner = rect().marginsRemoved(st::emojiPanMargins);
-		_showAnimation->setFinalImage(std::move(image), QRect(inner.topLeft() * cIntRetinaFactor(), inner.size() * cIntRetinaFactor()));
+		_showAnimation->setFinalImage(
+			std::move(image),
+			QRect(
+				inner.topLeft() * style::DevicePixelRatio(),
+				inner.size() * style::DevicePixelRatio()));
 		_showAnimation->setCornerMasks(Images::CornersMask(ImageRoundRadius::Small));
 		_showAnimation->start();
 	}
@@ -227,8 +251,10 @@ void Widget::startShowAnimation() {
 
 QImage Widget::grabForPanelAnimation() {
 	Ui::SendPendingMoveResizeEvents(this);
-	auto result = QImage(size() * cIntRetinaFactor(), QImage::Format_ARGB32_Premultiplied);
-	result.setDevicePixelRatio(cRetinaFactor());
+	auto result = QImage(
+		size() * style::DevicePixelRatio(),
+		QImage::Format_ARGB32_Premultiplied);
+	result.setDevicePixelRatio(style::DevicePixelRatio());
 	result.fill(Qt::transparent);
 	_inPanelGrab = true;
 	render(&result);
@@ -240,12 +266,8 @@ void Widget::setResultSelectedCallback(Fn<void(ResultSelected)> callback) {
 	_inner->setResultSelectedCallback(std::move(callback));
 }
 
-void Widget::setSendMenuType(Fn<SendMenu::Type()> &&callback) {
-	_inner->setSendMenuType(std::move(callback));
-}
-
-void Widget::setCurrentDialogsEntryState(Dialogs::EntryState state) {
-	_inner->setCurrentDialogsEntryState(state);
+void Widget::setSendMenuDetails(Fn<SendMenu::Details()> &&callback) {
+	_inner->setSendMenuDetails(std::move(callback));
 }
 
 void Widget::hideAnimated() {
@@ -266,7 +288,6 @@ void Widget::hideFinished() {
 	_a_show.stop();
 	_showAnimation.reset();
 	_cache = QPixmap();
-	_horizontal = false;
 	_hiding = false;
 
 	_scroll->scrollToY(0);
@@ -366,13 +387,16 @@ void Widget::inlineResultsDone(const MTPmessages_BotResults &result) {
 		auto entry = it->second.get();
 		entry->nextOffset = qs(d.vnext_offset().value_or_empty());
 		if (const auto switchPm = d.vswitch_pm()) {
-			switchPm->match([&](const MTPDinlineBotSwitchPM &data) {
-				entry->switchPmText = qs(data.vtext());
-				entry->switchPmStartToken = qs(data.vstart_param());
-			});
+			entry->switchPmText = qs(switchPm->data().vtext());
+			entry->switchPmStartToken = qs(switchPm->data().vstart_param());
+			entry->switchPmUrl = QByteArray();
+		} else if (const auto switchWebView = d.vswitch_webview()) {
+			entry->switchPmText = qs(switchWebView->data().vtext());
+			entry->switchPmStartToken = QString();
+			entry->switchPmUrl = switchWebView->data().vurl().v;
 		}
 
-		if (auto count = v.size()) {
+		if (const auto count = v.size()) {
 			entry->results.reserve(entry->results.size() + count);
 		}
 		auto added = 0;
@@ -448,7 +472,7 @@ void Widget::onInlineRequest() {
 		MTP_string(nextOffset)
 	)).done([=](const MTPmessages_BotResults &result) {
 		inlineResultsDone(result);
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		// show error?
 		_requesting.fire(false);
 		_inlineRequestId = 0;

@@ -15,8 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_image.h"
 
-#include <QtGui/QOpenGLBuffer>
-#include <QtGui/QOpenGLShaderProgram>
+#include <QOpenGLBuffer>
+#include <QOpenGLShaderProgram>
 
 namespace Webrtc {
 struct FrameWithInfo;
@@ -130,6 +130,7 @@ private:
 	const not_null<Viewport*> _owner;
 
 	GLfloat _factor = 1.;
+	int _ifactor = 1;
 	QSize _viewport;
 	bool _rgbaFrame = false;
 	bool _userpicFrame;

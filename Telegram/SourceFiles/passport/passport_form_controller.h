@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/sender.h"
-#include "boxes/confirm_phone_box.h"
+#include "base/timer.h"
 #include "base/weak_ptr.h"
 #include "core/core_cloud_password.h"
 
@@ -27,14 +27,13 @@ namespace Main {
 class Session;
 } // namespace Main
 
+namespace Ui {
+class SentCodeCall;
+} // namespace Ui
+
 namespace Passport {
 
-struct Config {
-	int32 hash = 0;
-	std::map<QString, QString> languagesByCountryCode;
-};
-Config &ConfigInstance();
-Config ParseConfig(const MTPhelp_PassportConfig &data);
+struct EditDocumentCountry;
 
 struct SavedCredentials {
 	bytes::vector hashForAuth;
@@ -52,15 +51,13 @@ struct FormRequest {
 		const QString &scope,
 		const QString &callbackUrl,
 		const QString &publicKey,
-		const QString &nonce,
-		const QString &errors);
+		const QString &nonce);
 
 	UserId botId;
 	QString scope;
 	QString callbackUrl;
 	QString publicKey;
 	QString nonce;
-	QString errors;
 
 };
 
@@ -189,7 +186,8 @@ struct Verification {
 	mtpRequestId requestId = 0;
 	QString phoneCodeHash;
 	int codeLength = 0;
-	std::unique_ptr<SentCodeCall> call;
+	QString fragmentUrl;
+	std::unique_ptr<Ui::SentCodeCall> call;
 
 	QString error;
 
@@ -416,6 +414,9 @@ public:
 	void cancel();
 	void cancelSure();
 
+	[[nodiscard]] rpl::producer<EditDocumentCountry> preferredLanguage(
+		const QString &countryCode);
+
 	rpl::lifetime &lifetime();
 
 	~FormController();
@@ -439,7 +440,6 @@ private:
 
 	void requestForm();
 	void requestPassword();
-	void requestConfig();
 
 	void formDone(const MTPaccount_AuthorizationForm &result);
 	void formFail(const QString &error);
@@ -560,7 +560,6 @@ private:
 	mtpRequestId _formRequestId = 0;
 	mtpRequestId _passwordRequestId = 0;
 	mtpRequestId _passwordCheckRequestId = 0;
-	mtpRequestId _configRequestId = 0;
 
 	PasswordSettings _password;
 	crl::time _lastSrpIdInvalidTime = 0;
@@ -571,6 +570,11 @@ private:
 	bool _cancelled = false;
 	mtpRequestId _recoverRequestId = 0;
 	base::flat_map<FileKey, std::unique_ptr<mtpFileLoader>> _fileLoaders;
+
+	struct {
+		int32 hash = 0;
+		std::map<QString, QString> languagesByCountryCode;
+	} _passportConfig;
 
 	rpl::event_stream<not_null<const EditFile*>> _scanUpdated;
 	rpl::event_stream<not_null<const Value*>> _valueSaveFinished;

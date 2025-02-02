@@ -8,16 +8,31 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_bottom_info.h"
 #include "ui/effects/animations.h"
-#include "base/weak_ptr.h"
 
-class HistoryMessage;
+class HistoryItem;
 struct HistoryMessageEdited;
 struct HistoryMessageForwarded;
+struct HistoryMessageReplyMarkup;
+
+namespace Data {
+struct ReactionId;
+} // namespace Data
+
+namespace Ui {
+struct BubbleRounding;
+class RoundCheckbox;
+} // namespace Ui
 
 namespace HistoryView {
 
+class ViewButton;
 class WebPage;
+
+namespace Reactions {
+class InlineList;
+} // namespace Reactions
 
 // Special type of Component for the channel actions log.
 struct LogEntryOriginal
@@ -30,6 +45,12 @@ struct LogEntryOriginal
 	std::unique_ptr<WebPage> page;
 };
 
+struct Factcheck
+: public RuntimeComponent<Factcheck, Element> {
+	std::unique_ptr<WebPage> page;
+	bool expanded = false;
+};
+
 struct PsaTooltipState : public RuntimeComponent<PsaTooltipState, Element> {
 	QString type;
 	mutable ClickHandlerPtr link;
@@ -37,17 +58,27 @@ struct PsaTooltipState : public RuntimeComponent<PsaTooltipState, Element> {
 	mutable bool buttonVisible = true;
 };
 
-class Message : public Element, public base::has_weak_ptr {
+struct BottomRippleMask {
+	QImage image;
+	int shift = 0;
+};
+
+class Message final : public Element {
 public:
 	Message(
 		not_null<ElementDelegate*> delegate,
-		not_null<HistoryMessage*> data,
+		not_null<HistoryItem*> data,
 		Element *replacing);
 	~Message();
 
 	void clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
 		bool pressed) override;
+
+	[[nodiscard]] const HistoryMessageEdited *displayedEditBadge() const;
+	[[nodiscard]] HistoryMessageEdited *displayedEditBadge();
+
+	bool embedReactionsInBubble() const override;
 
 	int marginTop() const override;
 	int marginBottom() const override;
@@ -64,15 +95,23 @@ public:
 		int bottom,
 		int width,
 		InfoDisplayType type) const override;
-	bool pointInTime(
+	TextState bottomInfoTextState(
 		int right,
 		int bottom,
 		QPoint point,
 		InfoDisplayType type) const override;
 	TextForMimeData selectedText(TextSelection selection) const override;
+	SelectedQuote selectedQuote(TextSelection selection) const override;
+	TextSelection selectionFromQuote(
+		const SelectedQuote &quote) const override;
 	TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const override;
+
+	Reactions::ButtonParameters reactionButtonParameters(
+		QPoint position,
+		const TextState &reactionState) const override;
+	int reactionsOptimalWidth() const override;
 
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
@@ -87,6 +126,8 @@ public:
 	bool hasOutLayout() const override;
 	bool drawBubble() const override;
 	bool hasBubble() const override;
+	TopicButton *displayedTopicButton() const override;
+	bool unwrapped() const override;
 	int minWidthForMedia() const override;
 	bool hasFastReply() const override;
 	bool displayFastReply() const override;
@@ -98,46 +139,73 @@ public:
 		int left,
 		int top,
 		int outerWidth) const override;
-	ClickHandlerPtr rightActionLink() const override;
-	bool displayEditedBadge() const override;
-	TimeId displayedEditDate() const override;
-	HistoryMessageReply *displayedReply() const override;
-	bool toggleSelectionByHandlerClick(
+	[[nodiscard]] ClickHandlerPtr rightActionLink(
+		std::optional<QPoint> pressPoint) const override;
+	[[nodiscard]] TimeId displayedEditDate() const override;
+	[[nodiscard]] bool toggleSelectionByHandlerClick(
 		const ClickHandlerPtr &handler) const override;
-	int infoWidth() const override;
+	[[nodiscard]] bool allowTextSelectionByHandler(
+		const ClickHandlerPtr &handler) const override;
+	[[nodiscard]] int infoWidth() const override;
+	[[nodiscard]] int bottomInfoFirstLineWidth() const override;
+	[[nodiscard]] bool bottomInfoIsWide() const override;
+	[[nodiscard]] bool isSignedAuthorElided() const override;
+
+	void itemDataChanged() override;
 
 	VerticalRepaintRange verticalRepaintRange() const override;
 
 	void applyGroupAdminChanges(
 		const base::flat_set<UserId> &changes) override;
 
+	void animateReaction(Ui::ReactionFlyAnimationArgs &&args) override;
+
+	void animateEffect(Ui::ReactionFlyAnimationArgs &&args) override;
+	auto takeEffectAnimation()
+	-> std::unique_ptr<Ui::ReactionFlyAnimation> override;
+
+	QRect effectIconGeometry() const override;
+	QRect innerGeometry() const override;
+	[[nodiscard]] BottomRippleMask bottomRippleMask(int buttonHeight) const;
+
 protected:
 	void refreshDataIdHook() override;
 
 private:
 	struct CommentsButton;
+	struct FromNameStatus;
+	struct RightAction;
 
-	not_null<HistoryMessage*> message() const;
+	bool updateBottomInfo();
 
 	void initLogEntryOriginal();
 	void initPsa();
-	void refreshEditedBadge();
 	void fromNameUpdated(int width) const;
 
-	[[nodiscard]] bool showForwardsFromSender(
-		not_null<HistoryMessageForwarded*> forwarded) const;
 	[[nodiscard]] TextSelection skipTextSelection(
 		TextSelection selection) const;
 	[[nodiscard]] TextSelection unskipTextSelection(
 		TextSelection selection) const;
 
 	void toggleCommentsButtonRipple(bool pressed);
+	void createCommentsButtonRipple();
+
+	void toggleTopicButtonRipple(bool pressed);
+	void createTopicButtonRipple();
+
+	void toggleRightActionRipple(bool pressed);
+
+	void toggleReplyRipple(bool pressed);
 
 	void paintCommentsButton(
 		Painter &p,
 		QRect &g,
 		const PaintContext &context) const;
 	void paintFromName(
+		Painter &p,
+		QRect &trect,
+		const PaintContext &context) const;
+	void paintTopicButton(
 		Painter &p,
 		QRect &trect,
 		const PaintContext &context) const;
@@ -168,6 +236,10 @@ private:
 		QPoint point,
 		QRect &trect,
 		not_null<TextState*> outResult) const;
+	bool getStateTopicButton(
+		QPoint point,
+		QRect &trect,
+		not_null<TextState*> outResult) const;
 	bool getStateForwardedInfo(
 		QPoint point,
 		QRect &trect,
@@ -189,40 +261,64 @@ private:
 
 	void updateMediaInBubbleState();
 	QRect countGeometry() const;
+	[[nodiscard]] Ui::BubbleRounding countMessageRounding() const;
+	[[nodiscard]] Ui::BubbleRounding countBubbleRounding(
+		Ui::BubbleRounding messageRounding) const;
+	[[nodiscard]] Ui::BubbleRounding countBubbleRounding() const;
 
 	int resizeContentGetHeight(int newWidth);
 	QSize performCountOptimalSize() override;
 	QSize performCountCurrentSize(int newWidth) override;
 	bool hasVisibleText() const override;
+	[[nodiscard]] int visibleTextLength() const;
+	[[nodiscard]] int visibleMediaTextLength() const;
+	[[nodiscard]] bool needInfoDisplay() const;
+	[[nodiscard]] bool invertMedia() const;
 
 	[[nodiscard]] bool isPinnedContext() const;
 
 	[[nodiscard]] bool displayFastShare() const;
 	[[nodiscard]] bool displayGoToOriginal() const;
 	[[nodiscard]] ClickHandlerPtr fastReplyLink() const;
-	[[nodiscard]] const HistoryMessageEdited *displayedEditBadge() const;
-	[[nodiscard]] HistoryMessageEdited *displayedEditBadge();
-	[[nodiscard]] bool displayPinIcon() const;
+	[[nodiscard]] ClickHandlerPtr prepareRightActionLink() const;
 
-	void initTime();
-	[[nodiscard]] int timeLeft() const;
-	[[nodiscard]] int plainMaxWidth() const;
+	void ensureRightAction() const;
+	void refreshTopicButton();
+	void refreshInfoSkipBlock(HistoryItem *textItem);
 	[[nodiscard]] int monospaceMaxWidth() const;
 
-	WebPage *logEntryOriginal() const;
+	void validateInlineKeyboard(HistoryMessageReplyMarkup *markup);
+	void updateViewButtonExistence();
+	[[nodiscard]] int viewButtonHeight() const;
+
+	[[nodiscard]] WebPage *logEntryOriginal() const;
+	[[nodiscard]] WebPage *factcheckBlock() const;
 
 	[[nodiscard]] ClickHandlerPtr createGoToCommentsLink() const;
 	[[nodiscard]] ClickHandlerPtr psaTooltipLink() const;
 	void psaTooltipToggled(bool shown) const;
 
 	void refreshRightBadge();
+	void validateFromNameText(PeerData *from) const;
 
-	mutable ClickHandlerPtr _rightActionLink;
+	mutable std::unique_ptr<RightAction> _rightAction;
 	mutable ClickHandlerPtr _fastReplyLink;
+	mutable std::unique_ptr<ViewButton> _viewButton;
+	std::unique_ptr<TopicButton> _topicButton;
 	mutable std::unique_ptr<CommentsButton> _comments;
 
+	mutable Ui::Text::String _fromName;
+	mutable std::unique_ptr<FromNameStatus> _fromNameStatus;
+	mutable std::unique_ptr<Ui::RoundCheckbox> _selectionRoundCheckbox;
 	Ui::Text::String _rightBadge;
-	int _bubbleWidthLimit = 0;
+	mutable int _fromNameVersion = 0;
+	uint32 _bubbleWidthLimit : 28 = 0;
+	uint32 _invertMedia : 1 = 0;
+	uint32 _hideReply : 1 = 0;
+	uint32 _rightBadgeHasBoosts : 1 = 0;
+	uint32 _postShowingAuthor : 1 = 0;
+
+	BottomInfo _bottomInfo;
 
 };
 

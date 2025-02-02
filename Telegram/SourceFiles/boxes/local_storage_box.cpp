@@ -20,8 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/cache/storage_cache_database.h"
 #include "data/data_session.h"
 #include "lang/lang_keys.h"
-#include "mainwindow.h"
 #include "main/main_session.h"
+#include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
@@ -104,9 +104,9 @@ QString TimeLimitText(size_type limit) {
 	const auto weeks = (days / 7);
 	const auto months = (days / 29);
 	return (months > 0)
-		? tr::lng_local_storage_limit_months(tr::now, lt_count, months)
+		? tr::lng_months(tr::now, lt_count, months)
 		: (limit > 0)
-		? tr::lng_local_storage_limit_weeks(tr::now, lt_count, weeks)
+		? tr::lng_weeks(tr::now, lt_count, weeks)
 		: tr::lng_local_storage_limit_never(tr::now);
 }
 
@@ -167,6 +167,7 @@ LocalStorageBox::Row::Row(
 	sizeText(data),
 	st::localStorageRowSize)
 , _clear(this, std::move(clear), st::localStorageClear) {
+	_clear->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	_clear->setVisible(data.count != 0);
 }
 
@@ -238,10 +239,11 @@ int LocalStorageBox::Row::resizeGetHeight(int newWidth) {
 }
 
 void LocalStorageBox::Row::paintEvent(QPaintEvent *e) {
-	if (!_progress || true) {
+#if 0 // not used
+	if (!_progress) {
 		return;
 	}
-	Painter p(this);
+	auto p = QPainter(this);
 	const auto padding = st::localStorageRowPadding;
 	const auto height = st::localStorageRowHeight;
 	const auto bottom = height - padding.bottom() - _description->height();
@@ -252,6 +254,7 @@ void LocalStorageBox::Row::paintEvent(QPaintEvent *e) {
 			st::proxyCheckingPosition.y() + bottom
 		},
 		width());
+#endif
 }
 
 QString LocalStorageBox::Row::titleText(const Database::TaggedSummary &data) const {
@@ -278,19 +281,19 @@ LocalStorageBox::LocalStorageBox(
 	_timeLimit = settings.totalTimeLimit;
 }
 
-void LocalStorageBox::Show(not_null<::Main::Session*> session) {
+void LocalStorageBox::Show(not_null<Window::SessionController*> controller) {
 	auto shared = std::make_shared<object_ptr<LocalStorageBox>>(
-		Box<LocalStorageBox>(session, CreateTag()));
+		Box<LocalStorageBox>(&controller->session(), CreateTag()));
 	const auto weak = shared->data();
 	rpl::combine(
-		session->data().cache().statsOnMain(),
-		session->data().cacheBigFile().statsOnMain()
+		controller->session().data().cache().statsOnMain(),
+		controller->session().data().cacheBigFile().statsOnMain()
 	) | rpl::start_with_next([=](
 			Database::Stats &&stats,
 			Database::Stats &&statsBig) {
 		weak->update(std::move(stats), std::move(statsBig));
 		if (auto &strong = *shared) {
-			Ui::show(std::move(strong));
+			controller->uiShow()->show(std::move(strong));
 		}
 	}, weak->lifetime());
 }
@@ -593,13 +596,4 @@ void LocalStorageBox::save() {
 	_session->local().updateCacheSettings(update, updateBig);
 	_session->data().cache().updateSettings(update);
 	closeBox();
-}
-
-void LocalStorageBox::paintEvent(QPaintEvent *e) {
-	BoxContent::paintEvent(e);
-
-	Painter p(this);
-
-	p.setFont(st::boxTextFont);
-	p.setPen(st::windowFg);
 }

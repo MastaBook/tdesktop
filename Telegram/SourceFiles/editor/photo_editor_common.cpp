@@ -8,14 +8,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "editor/photo_editor_common.h"
 
 #include "editor/scene/scene.h"
+#include "ui/painter.h"
 
 namespace Editor {
 
 QImage ImageModified(QImage image, const PhotoModifications &mods) {
+	Expects(!image.isNull());
+
 	if (!mods) {
 		return image;
 	}
 	if (mods.paint) {
+		if (image.format() != QImage::Format_ARGB32_Premultiplied) {
+			image = image.convertToFormat(
+				QImage::Format_ARGB32_Premultiplied);
+		}
+
 		Painter p(&image);
 		PainterHighQualityEnabler hq(p);
 

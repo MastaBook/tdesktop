@@ -6,7 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/localstorage.h"
-//
+
 #include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/details/storage_file_utilities.h"
@@ -15,10 +15,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "base/platform/base_platform_info.h"
-#include "ui/effects/animation_value.h"
+#include "base/random.h"
+#include "ui/power_saving.h"
 #include "core/update_checker.h"
 #include "core/file_location.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -49,7 +51,7 @@ constexpr auto kWallPaperLegacySerializeTagId = int32(-111);
 constexpr auto kWallPaperSerializeTagId = int32(-112);
 constexpr auto kWallPaperSidesLimit = 10'000;
 
-const auto kThemeNewPathRelativeTag = qstr("special://new_tag");
+const auto kThemeNewPathRelativeTag = u"special://new_tag"_q;
 
 using namespace Storage::details;
 using Storage::FileKey;
@@ -125,6 +127,10 @@ bool CheckStreamStatus(QDataStream &stream) {
 void applyReadContext(ReadSettingsContext &&context) {
 	ApplyReadFallbackConfig(context);
 
+	DEBUG_LOG(("Theme: applying context, legacy: %1, day: %2, night: %3"
+		).arg(context.themeKeyLegacy
+		).arg(context.themeKeyDay
+		).arg(context.themeKeyNight));
 	_themeKeyLegacy = context.themeKeyLegacy;
 	_themeKeyDay = context.themeKeyDay;
 	_themeKeyNight = context.themeKeyNight;
@@ -137,7 +143,7 @@ void applyReadContext(ReadSettingsContext &&context) {
 
 bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
-	QFile file(cWorkingDir() + qsl("tdata/config"));
+	auto file = QFile(cWorkingDir() + u"tdata/config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old config..."));
 		QDataStream stream(&file);
@@ -234,9 +240,9 @@ void _readOldUserSettingsFields(
 bool _readOldUserSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPrefix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPrefix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPrefix = QString();
-	QFile file(cWorkingDir() + cDataFile() + testPrefix + qsl("_config"));
+	QFile file(cWorkingDir() + cDataFile() + testPrefix + u"_config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old user config..."));
 		qint32 version = 0;
@@ -315,7 +321,7 @@ void _readOldMtpDataFields(
 bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPostfix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPostfix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPostfix = QString();
 	QFile file(cWorkingDir() + cDataFile() + testPostfix);
 	if (file.open(QIODevice::ReadOnly)) {
@@ -349,13 +355,13 @@ void start() {
 
 	_localLoader = new TaskQueue(kFileLoaderQueueStopTimeout);
 
-	_basePath = cWorkingDir() + qsl("tdata/");
+	_basePath = cWorkingDir() + u"tdata/"_q;
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
 	ReadSettingsContext context;
 	FileReadDescriptor settingsData;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	if (!ReadFile(settingsData, name, _basePath)) {
 		_readOldSettings(true, context);
@@ -436,12 +442,12 @@ void writeSettings() {
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	FileWriteDescriptor settings(name, _basePath);
 	if (_settingsSalt.isEmpty() || !SettingsKey) {
 		_settingsSalt.resize(LocalEncryptSaltSize);
-		memset_rand(_settingsSalt.data(), _settingsSalt.size());
+		base::RandomFill(_settingsSalt.data(), _settingsSalt.size());
 		SettingsKey = CreateLegacyLocalKey(QByteArray(), _settingsSalt);
 	}
 	settings.writeData(_settingsSalt);
@@ -467,6 +473,8 @@ void writeSettings() {
 	}
 	size += sizeof(quint32) + sizeof(qint32) * 8;
 
+	const auto powerSaving = PowerSaving::Current().value();
+
 	EncryptedDescriptor data(size);
 	data.stream << quint32(dbiAutoStart) << qint32(cAutoStart());
 	data.stream << quint32(dbiStartMinimized) << qint32(cStartMinimized());
@@ -478,7 +486,7 @@ void writeSettings() {
 	data.stream << quint32(dbiFallbackProductionConfig) << configSerialized;
 	data.stream << quint32(dbiApplicationSettings) << applicationSettings;
 	data.stream << quint32(dbiDialogLastPath) << cDialogLastPath();
-	data.stream << quint32(dbiAnimationsDisabled) << qint32(anim::Disabled() ? 1 : 0);
+	data.stream << quint32(dbiPowerSaving) << qint32(powerSaving);
 
 	data.stream
 		<< quint32(dbiThemeKey)
@@ -545,7 +553,7 @@ const QString &readAutoupdatePrefixRaw() {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://updates.tdesktop.com");
+	return AutoupdatePrefix("https://td.telegram.org");
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -571,8 +579,9 @@ void writeAutoupdatePrefix(const QString &prefix) {
 QString readAutoupdatePrefix() {
 	Expects(!Core::UpdaterDisabled());
 
+	static const auto RegExp = QRegularExpression("/+$");
 	auto result = readAutoupdatePrefixRaw();
-	return result.replace(QRegularExpression("/+$"), QString());
+	return result.replace(RegExp, QString());
 }
 
 void writeBackground(const Data::WallPaper &paper, const QImage &image) {
@@ -605,7 +614,7 @@ void writeBackground(const Data::WallPaper &paper, const QImage &image) {
 		dst = dst.subspan(sizeof(qint32));
 		bytes::copy(dst, bytes::object_as_span(&height));
 		dst = dst.subspan(sizeof(qint32));
-		const auto src = bytes::make_span(image.constBits(), srcsize);
+		const auto src = bytes::make_span(copy.constBits(), srcsize);
 		if (srcsize == dstsize) {
 			bytes::copy(dst, src);
 		} else {
@@ -869,6 +878,7 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 
 	FileReadDescriptor theme;
 	if (!ReadEncryptedFile(theme, key, _basePath, SettingsKey)) {
+		DEBUG_LOG(("Theme: Could not read file for key: %1").arg(key));
 		return {};
 	}
 
@@ -893,6 +903,9 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 		object.pathRelative = tag;
 	}
 	if (theme.stream.status() != QDataStream::Ok) {
+		DEBUG_LOG(("Theme: Bad status for key: %1, tag: %2"
+			).arg(key
+			).arg(tag));
 		return {};
 	}
 
@@ -932,6 +945,9 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 		>> field2;
 	if (!ignoreCache) {
 		if (theme.stream.status() != QDataStream::Ok) {
+			DEBUG_LOG(("Theme: Bad status for cache, key: %1, tag: %2"
+				).arg(key
+				).arg(tag));
 			return {};
 		}
 		cache.paletteChecksum = cachePaletteChecksum;
@@ -950,8 +966,12 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
 	auto read = readThemeUsingKey(key);
 	const auto result = read.object.pathAbsolute;
+	if (read.object.content.isEmpty()) {
+		DEBUG_LOG(("Theme: Could not read content for key: %1").arg(key));
+	}
 	if (read.object.content.isEmpty()
 		|| !Window::Theme::Initialize(std::move(read))) {
+		DEBUG_LOG(("Theme: Could not initialized for key: %1").arg(key));
 		return std::nullopt;
 	}
 	return result;
@@ -961,13 +981,23 @@ void writeTheme(const Window::Theme::Saved &saved) {
 	using namespace Window::Theme;
 
 	if (_themeKeyLegacy) {
+		DEBUG_LOG(("Theme: skipping write, because legacy: %1"
+			).arg(_themeKeyLegacy));
 		return;
 	}
 	auto &themeKey = IsNightMode()
 		? _themeKeyNight
 		: _themeKeyDay;
+	DEBUG_LOG(("Theme: writing (night: %1), key_day: %2, key_night: %3"
+		).arg(Logs::b(IsNightMode())
+		).arg(_themeKeyDay
+		).arg(_themeKeyNight));
 	if (saved.object.content.isEmpty()) {
 		if (themeKey) {
+			if (IsNightMode()) {
+				DEBUG_LOG(("Theme: cleared for night mode."));
+				SetNightModeValue(false);
+			}
 			ClearKey(themeKey, _basePath);
 			themeKey = 0;
 			writeSettings();
@@ -1032,17 +1062,36 @@ void InitialLoadTheme() {
 		: (Window::Theme::IsNightMode()
 			? _themeKeyNight
 			: _themeKeyDay);
+	DEBUG_LOG(("Theme: initial load (night: %1), "
+		"key_legacy: %2, key_day: %3, key_night: %4"
+		).arg(Logs::b(Window::Theme::IsNightMode())
+		).arg(_themeKeyLegacy
+		).arg(_themeKeyDay
+		).arg(_themeKeyNight));
 	if (!key) {
+		if (Window::Theme::IsNightMode()) {
+			DEBUG_LOG(("Theme: zero key for night mode."));
+			Window::Theme::SetNightModeValue(false);
+		}
 		return;
 	} else if (const auto path = InitialLoadThemeUsingKey(key)) {
+		DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
 		if (_themeKeyLegacy) {
 			Window::Theme::SetNightModeValue(*path
 				== Window::Theme::NightThemePath());
 			(Window::Theme::IsNightMode()
 				? _themeKeyNight
 				: _themeKeyDay) = base::take(_themeKeyLegacy);
+			DEBUG_LOG(("Theme: now (night: %1), "
+				"key_legacy: %2, key_day: %3, key_night: %4 (path: %5)"
+				).arg(Logs::b(Window::Theme::IsNightMode())
+				).arg(_themeKeyLegacy
+				).arg(_themeKeyDay
+				).arg(_themeKeyNight
+				).arg(*path));
 		}
 	} else {
+		DEBUG_LOG(("Theme: could not load, clearing.."));
 		clearTheme();
 	}
 }

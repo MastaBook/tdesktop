@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/panel_animation.h"
 #include "ui/ui_utility.h"
 #include "ui/filter_icons.h"
+#include "ui/painter.h"
 #include "ui/cached_round_corners.h"
 #include "lang/lang_keys.h"
 #include "core/application.h"
@@ -26,36 +27,51 @@ constexpr auto kIconsPerRow = 6;
 
 constexpr auto kIcons = std::array{
 	FilterIcon::Cat,
-	FilterIcon::Crown,
-	FilterIcon::Favorite,
-	FilterIcon::Flower,
+	FilterIcon::Book,
+	FilterIcon::Money,
+	// FilterIcon::Camera,
 	FilterIcon::Game,
+	// FilterIcon::House,
+	FilterIcon::Light,
+	FilterIcon::Like,
+	// FilterIcon::Plus,
+	FilterIcon::Note,
+	FilterIcon::Palette,
+	FilterIcon::Travel,
+	FilterIcon::Sport,
+	FilterIcon::Favorite,
+	FilterIcon::Study,
+	FilterIcon::Airplane,
+	// FilterIcon::Microbe,
+	// FilterIcon::Worker,
+	FilterIcon::Private,
+	FilterIcon::Groups,
+	FilterIcon::All,
+	FilterIcon::Unread,
+	// FilterIcon::Check,
+	FilterIcon::Bots,
+	// FilterIcon::Folders,
+	FilterIcon::Crown,
+	FilterIcon::Flower,
 	FilterIcon::Home,
 	FilterIcon::Love,
 	FilterIcon::Mask,
 	FilterIcon::Party,
-	FilterIcon::Sport,
-	FilterIcon::Study,
 	FilterIcon::Trade,
-	FilterIcon::Travel,
 	FilterIcon::Work,
-
-	FilterIcon::All,
-	FilterIcon::Unread,
 	FilterIcon::Unmuted,
-	FilterIcon::Bots,
 	FilterIcon::Channels,
-	FilterIcon::Groups,
-	FilterIcon::Private,
 	FilterIcon::Custom,
 	FilterIcon::Setup,
+	// FilterIcon::Poo,
 };
 
 } // namespace
 
 FilterIconPanel::FilterIconPanel(QWidget *parent)
 : RpWidget(parent)
-, _inner(Ui::CreateChild<Ui::RpWidget>(this)) {
+, _inner(Ui::CreateChild<Ui::RpWidget>(this))
+, _innerBg(ImageRoundRadius::Small, st::dialogsBg) {
 	setup();
 }
 
@@ -102,11 +118,7 @@ void FilterIconPanel::setupInner() {
 	_inner->paintRequest(
 		) | rpl::start_with_next([=](QRect clip) {
 		auto p = Painter(_inner);
-		Ui::FillRoundRect(
-			p,
-			_inner->rect(),
-			st::emojiPanBg,
-			ImageRoundRadius::Small);
+		_innerBg.paint(p, _inner->rect());
 		p.setFont(st::emojiPanHeaderFont);
 		p.setPen(st::emojiPanHeaderFg);
 		p.drawTextLeft(
@@ -121,15 +133,21 @@ void FilterIconPanel::setupInner() {
 			if (!rect.intersects(clip)) {
 				continue;
 			}
-			if (i == selected) {
+			const auto over = (i == selected);
+			if (over) {
 				Ui::FillRoundRect(
 					p,
 					rect,
-					st::emojiPanHover,
+					st::dialogsBgOver,
 					Ui::StickerHoverCorners);
 			}
 			const auto icon = LookupFilterIcon(kIcons[i]).normal;
-			icon->paintInCenter(p, rect, st::emojiIconFg->c);
+			icon->paintInCenter(
+				p,
+				rect,
+				(over
+					? st::dialogsUnreadBgMutedOver
+					: st::dialogsUnreadBgMuted)->c);
 		}
 	}, _inner->lifetime());
 
@@ -266,7 +284,7 @@ void FilterIconPanel::paintEvent(QPaintEvent *e) {
 	}
 }
 
-void FilterIconPanel::enterEventHook(QEvent *e) {
+void FilterIconPanel::enterEventHook(QEnterEvent *e) {
 	Core::App().registerLeaveSubscription(this);
 	showAnimated();
 }
@@ -359,7 +377,11 @@ void FilterIconPanel::startShowAnimation() {
 
 		_showAnimation = std::make_unique<Ui::PanelAnimation>(st::emojiPanAnimation, Ui::PanelAnimation::Origin::TopRight);
 		auto inner = rect().marginsRemoved(st::emojiPanMargins);
-		_showAnimation->setFinalImage(std::move(image), QRect(inner.topLeft() * cIntRetinaFactor(), inner.size() * cIntRetinaFactor()));
+		_showAnimation->setFinalImage(
+			std::move(image),
+			QRect(
+				inner.topLeft() * style::DevicePixelRatio(),
+				inner.size() * style::DevicePixelRatio()));
 		_showAnimation->setCornerMasks(Images::CornersMask(ImageRoundRadius::Small));
 		_showAnimation->start();
 	}
@@ -377,9 +399,9 @@ QImage FilterIconPanel::grabForAnimation() {
 	Ui::SendPendingMoveResizeEvents(this);
 
 	auto result = QImage(
-		size() * cIntRetinaFactor(),
+		size() * style::DevicePixelRatio(),
 		QImage::Format_ARGB32_Premultiplied);
-	result.setDevicePixelRatio(cRetinaFactor());
+	result.setDevicePixelRatio(style::DevicePixelRatio());
 	result.fill(Qt::transparent);
 	if (_inner) {
 		QPainter p(&result);

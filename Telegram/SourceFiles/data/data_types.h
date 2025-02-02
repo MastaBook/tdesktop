@@ -7,9 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/value_ordering.h"
-#include "ui/text/text.h" // For QFIXED_MAX
+#include "ui/text/text.h" // Ui::kQFixedMax.
 #include "data/data_peer_id.h"
+#include "data/data_msg_id.h"
+#include "base/qt/qt_compare.h"
 
 class HistoryItem;
 using HistoryItemsList = std::vector<not_null<HistoryItem*>>;
@@ -35,11 +36,14 @@ using Options = base::flags<Option>;
 
 namespace Data {
 
+struct FileOrigin;
+struct EmojiStatusCollectible;
+
 struct UploadState {
-	UploadState(int size) : size(size) {
+	explicit UploadState(int64 size) : size(size) {
 	}
-	int offset = 0;
-	int size = 0;
+	int64 offset = 0;
+	int64 size = 0;
 	bool waitingForAlbum = false;
 };
 
@@ -48,6 +52,8 @@ Storage::Cache::Key DocumentThumbCacheKey(int32 dcId, uint64 id);
 Storage::Cache::Key WebDocumentCacheKey(const WebFileLocation &location);
 Storage::Cache::Key UrlCacheKey(const QString &location);
 Storage::Cache::Key GeoPointCacheKey(const GeoPointLocation &location);
+Storage::Cache::Key AudioAlbumThumbCacheKey(
+	const AudioAlbumThumbLocation &location);
 
 constexpr auto kImageCacheTag = uint8(0x01);
 constexpr auto kStickerCacheTag = uint8(0x02);
@@ -55,18 +61,20 @@ constexpr auto kVoiceMessageCacheTag = uint8(0x03);
 constexpr auto kVideoMessageCacheTag = uint8(0x04);
 constexpr auto kAnimationCacheTag = uint8(0x05);
 
-struct FileOrigin;
-
 } // namespace Data
 
 struct MessageGroupId {
-	PeerId peer = 0;
+	uint64 peerAndScheduledFlag = 0;
 	uint64 value = 0;
 
 	MessageGroupId() = default;
-	static MessageGroupId FromRaw(PeerId peer, uint64 value) {
+	static MessageGroupId FromRaw(
+			PeerId peer,
+			uint64 value,
+			bool scheduled) {
 		auto result = MessageGroupId();
-		result.peer = peer;
+		result.peerAndScheduledFlag = peer.value
+			| (scheduled ? (1ULL << 55) : 0);
 		result.value = value;
 		return result;
 	}
@@ -81,9 +89,9 @@ struct MessageGroupId {
 		return value;
 	}
 
-	friend inline std::pair<uint64, uint64> value_ordering_helper(MessageGroupId value) {
-		return std::make_pair(value.value, value.peer.value);
-	}
+	friend inline constexpr auto operator<=>(
+		MessageGroupId,
+		MessageGroupId) noexcept = default;
 
 };
 
@@ -91,7 +99,6 @@ class PeerData;
 class UserData;
 class ChatData;
 class ChannelData;
-struct BotCommand;
 struct BotInfo;
 
 namespace Data {
@@ -100,92 +107,26 @@ class Folder;
 
 using FolderId = int32;
 using FilterId = int32;
-using MsgId = int32;
-constexpr auto StartClientMsgId = MsgId(-0x7FFFFFFF);
-constexpr auto EndClientMsgId = MsgId(-0x40000000);
-constexpr auto ShowAtTheEndMsgId = MsgId(-0x40000000);
-constexpr auto SwitchAtTopMsgId = MsgId(-0x3FFFFFFF);
-constexpr auto ShowAtProfileMsgId = MsgId(-0x3FFFFFFE);
-constexpr auto ShowAndStartBotMsgId = MsgId(-0x3FFFFFFD);
-constexpr auto ShowAtGameShareMsgId = MsgId(-0x3FFFFFFC);
-constexpr auto ShowForChooseMessagesMsgId = MsgId(-0x3FFFFFFB);
-constexpr auto ServerMaxMsgId = MsgId(0x3FFFFFFF);
-constexpr auto ShowAtUnreadMsgId = MsgId(0);
-constexpr inline bool IsClientMsgId(MsgId id) {
-	return (id >= StartClientMsgId && id < EndClientMsgId);
-}
-constexpr inline bool IsServerMsgId(MsgId id) {
-	return (id > 0 && id < ServerMaxMsgId);
-}
-
-struct MsgRange {
-	MsgRange() = default;
-	MsgRange(MsgId from, MsgId till) : from(from), till(till) {
-	}
-
-	MsgId from = 0;
-	MsgId till = 0;
-};
-inline bool operator==(const MsgRange &a, const MsgRange &b) {
-	return (a.from == b.from) && (a.till == b.till);
-}
-inline bool operator!=(const MsgRange &a, const MsgRange &b) {
-	return !(a == b);
-}
-
-struct FullMsgId {
-	constexpr FullMsgId() = default;
-	constexpr FullMsgId(ChannelId channel, MsgId msg)
-	: channel(channel), msg(msg) {
-	}
-
-	explicit operator bool() const {
-		return msg != 0;
-	}
-
-
-	inline constexpr bool operator<(const FullMsgId &other) const {
-		if (channel < other.channel) {
-			return true;
-		} else if (channel > other.channel) {
-			return false;
-		}
-		return msg < other.msg;
-	}
-	inline constexpr bool operator>(const FullMsgId &other) const {
-		return other < *this;
-	}
-	inline constexpr bool operator<=(const FullMsgId &other) const {
-		return !(other < *this);
-	}
-	inline constexpr bool operator>=(const FullMsgId &other) const {
-		return !(*this < other);
-	}
-	inline constexpr bool operator==(const FullMsgId &other) const {
-		return (channel == other.channel) && (msg == other.msg);
-	}
-	inline constexpr bool operator!=(const FullMsgId &other) const {
-		return !(*this == other);
-	}
-
-	ChannelId channel = NoChannel;
-	MsgId msg = 0;
-
-};
-
-Q_DECLARE_METATYPE(FullMsgId);
 
 using MessageIdsList = std::vector<FullMsgId>;
 
-PeerId PeerFromMessage(const MTPmessage &message);
-MTPDmessage::Flags FlagsFromMessage(const MTPmessage &message);
-MsgId IdFromMessage(const MTPmessage &message);
-TimeId DateFromMessage(const MTPmessage &message);
+[[nodiscard]] PeerId PeerFromMessage(const MTPmessage &message);
+[[nodiscard]] MTPDmessage::Flags FlagsFromMessage(
+	const MTPmessage &message);
+[[nodiscard]] MsgId IdFromMessage(const MTPmessage &message);
+[[nodiscard]] TimeId DateFromMessage(const MTPmessage &message);
+[[nodiscard]] BusinessShortcutId BusinessShortcutIdFromMessage(
+	const MTPmessage &message);
+
+[[nodiscard]] inline MTPint MTP_int(MsgId id) noexcept {
+	return MTP_int(id.bare);
+}
 
 class DocumentData;
 class PhotoData;
 struct WebPageData;
 struct GameData;
+struct BotAppData;
 struct PollData;
 
 using PhotoId = uint64;
@@ -196,6 +137,27 @@ using WebPageId = uint64;
 using GameId = uint64;
 using PollId = uint64;
 using WallPaperId = uint64;
+using CallId = uint64;
+using BotAppId = uint64;
+using EffectId = uint64;
+using CollectibleId = uint64;
+
+struct EmojiStatusId {
+	DocumentId documentId = 0;
+	std::shared_ptr<Data::EmojiStatusCollectible> collectible;
+
+	explicit operator bool() const {
+		return documentId || collectible;
+	}
+
+	friend inline auto operator<=>(
+		const EmojiStatusId &,
+		const EmojiStatusId &) = default;
+	friend inline bool operator==(
+		const EmojiStatusId &,
+		const EmojiStatusId &) = default;
+};
+
 constexpr auto CancelledWebPageId = WebPageId(0xFFFFFFFFFFFFFFFFULL);
 
 struct PreparedPhotoThumb {
@@ -217,7 +179,7 @@ enum LocationType {
 	SecureFileLocation = 0xcbc7ee28, // mtpc_inputSecureFileLocation
 };
 
-enum FileStatus {
+enum FileStatus : signed char {
 	FileDownloadFailed = -2,
 	FileUploadFailed = -1,
 	FileReady = 1,
@@ -256,7 +218,7 @@ struct MessageCursor {
 
 	int position = 0;
 	int anchor = 0;
-	int scroll = QFIXED_MAX;
+	int scroll = Ui::kQFixedMax;
 
 };
 
@@ -287,60 +249,142 @@ struct StickerSetIdentifier {
 	}
 };
 
-enum class MessageFlag : uint32 {
-	HideEdited            = (1U << 0),
-	Legacy                = (1U << 1),
-	HasReplyMarkup        = (1U << 2),
-	HasFromId             = (1U << 3),
-	HasPostAuthor         = (1U << 4),
-	HasViews              = (1U << 5),
-	HasReplyInfo          = (1U << 6),
-	HasViaBot             = (1U << 7),
-	AdminLogEntry         = (1U << 8),
-	Post                  = (1U << 9),
-	Silent                = (1U << 10),
-	Outgoing              = (1U << 11),
-	Pinned                = (1U << 12),
-	MediaIsUnread         = (1U << 13),
-	MentionsMe            = (1U << 14),
-	IsOrWasScheduled      = (1U << 15),
+enum class MessageFlag : uint64 {
+	HideEdited            = (1ULL << 0),
+	Legacy                = (1ULL << 1),
+	HasReplyMarkup        = (1ULL << 2),
+	HasFromId             = (1ULL << 3),
+	HasPostAuthor         = (1ULL << 4),
+	HasViews              = (1ULL << 5),
+	HasReplyInfo          = (1ULL << 6),
+	CanViewReactions      = (1ULL << 7),
+	AdminLogEntry         = (1ULL << 8),
+	Post                  = (1ULL << 9),
+	Silent                = (1ULL << 10),
+	Outgoing              = (1ULL << 11),
+	Pinned                = (1ULL << 12),
+	MediaIsUnread         = (1ULL << 13),
+	HasUnreadReaction     = (1ULL << 14),
+	MentionsMe            = (1ULL << 15),
+	IsOrWasScheduled      = (1ULL << 16),
+	NoForwards            = (1ULL << 17),
+	InvertMedia           = (1ULL << 18),
 
 	// Needs to return back to inline mode.
-	HasSwitchInlineButton = (1U << 16),
+	HasSwitchInlineButton = (1ULL << 19),
 
 	// For "shared links" indexing.
-	HasTextLinks          = (1U << 17),
+	HasTextLinks          = (1ULL << 20),
 
 	// Group / channel create or migrate service message.
-	IsGroupEssential      = (1U << 18),
+	IsGroupEssential      = (1ULL << 21),
 
 	// Edited media is generated on the client
 	// and should not update media from server.
-	IsLocalUpdateMedia    = (1U << 19),
+	IsLocalUpdateMedia    = (1ULL << 22),
 
 	// Sent from inline bot, need to re-set media when sent.
-	FromInlineBot         = (1U << 20),
+	FromInlineBot         = (1ULL << 23),
 
 	// Generated on the client side and should be unread.
-	ClientSideUnread      = (1U << 21),
+	ClientSideUnread      = (1ULL << 24),
 
 	// In a supergroup.
-	HasAdminBadge         = (1U << 22),
+	HasAdminBadge         = (1ULL << 25),
 
 	// Outgoing message that is being sent.
-	BeingSent             = (1U << 23),
+	BeingSent             = (1ULL << 26),
 
 	// Outgoing message and failed to be sent.
-	SendingFailed         = (1U << 24),
+	SendingFailed         = (1ULL << 27),
 
-	// No media and only a several emoji text.
-	IsolatedEmoji         = (1U << 25),
+	// No media and only a several emoji or an only custom emoji text.
+	SpecialOnlyEmoji      = (1ULL << 28),
 
-	// Local message existing in the message history.
-	LocalHistoryEntry     = (1U << 26),
+	// Message existing in the message history.
+	HistoryEntry          = (1ULL << 29),
+
+	// Local message, not existing on the server.
+	Local                 = (1ULL << 30),
 
 	// Fake message for some UI element.
-	FakeHistoryItem       = (1U << 27),
+	FakeHistoryItem       = (1ULL << 31),
+
+	// Contact sign-up message, notification should be skipped for Silent.
+	IsContactSignUp       = (1ULL << 32),
+
+	// Optimization for item text custom emoji repainting.
+	CustomEmojiRepainting = (1ULL << 33),
+
+	// Profile photo suggestion, views have special media type.
+	IsUserpicSuggestion   = (1ULL << 34),
+
+	OnlyEmojiAndSpaces    = (1ULL << 35),
+	OnlyEmojiAndSpacesSet = (1ULL << 36),
+
+	// Fake message with some info, like bot cover and information.
+	FakeAboutView         = (1ULL << 37),
+
+	StoryItem             = (1ULL << 38),
+
+	InHighlightProcess    = (1ULL << 39),
+
+	// If not set then we need to refresh _displayFrom value.
+	DisplayFromChecked    = (1ULL << 40),
+	DisplayFromProfiles   = (1ULL << 41),
+
+	ShowSimilarChannels   = (1ULL << 42),
+
+	Sponsored             = (1ULL << 43),
+
+	ReactionsAreTags      = (1ULL << 44),
+
+	ShortcutMessage       = (1ULL << 45),
+
+	EffectWatched         = (1ULL << 46),
+
+	SensitiveContent      = (1ULL << 47),
+	HasRestrictions       = (1ULL << 48),
+
+	EstimatedDate         = (1ULL << 49),
+
+	ReactionsAllowed      = (1ULL << 50),
 };
 inline constexpr bool is_flag_type(MessageFlag) { return true; }
 using MessageFlags = base::flags<MessageFlag>;
+
+enum class MediaWebPageFlag : uint8 {
+	ForceLargeMedia = (1 << 0),
+	ForceSmallMedia = (1 << 1),
+	Manual = (1 << 2),
+	Safe = (1 << 3),
+	Sponsored = (1 << 4),
+};
+inline constexpr bool is_flag_type(MediaWebPageFlag) { return true; }
+using MediaWebPageFlags = base::flags<MediaWebPageFlag>;
+
+namespace Data {
+
+enum class ForwardOptions {
+	PreserveInfo,
+	NoSenderNames,
+	NoNamesAndCaptions,
+};
+
+struct ForwardDraft {
+	MessageIdsList ids;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
+
+	friend inline auto operator<=>(
+		const ForwardDraft&,
+		const ForwardDraft&) = default;
+};
+
+using ForwardDrafts = base::flat_map<MsgId, ForwardDraft>;
+
+struct ResolvedForwardDraft {
+	HistoryItemsList items;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
+};
+
+} // namespace Data

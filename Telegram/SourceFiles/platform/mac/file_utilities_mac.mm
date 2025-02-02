@@ -9,11 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/platform/mac/base_utilities_mac.h"
 #include "lang/lang_keys.h"
-#include "base/qt_adapters.h"
 #include "styles/style_window.h"
-
-#include <QtWidgets/QApplication>
-#include <QtGui/QScreen>
 
 #include <Cocoa/Cocoa.h>
 #include <CoreFoundation/CFURL.h>
@@ -69,7 +65,7 @@ QString strNeedToRefresh2() {
 }
 
 - (id) init:(NSString *)file;
-- (BOOL) popupAtX:(int)x andY:(int)y;
+- (BOOL) popupAt:(NSPoint)point;
 - (void) itemChosen:(id)sender;
 - (void) dealloc;
 
@@ -175,7 +171,7 @@ QString strNeedToRefresh2() {
 	return self;
 }
 
-- (BOOL) popupAtX:(int)x andY:(int)y {
+- (BOOL) popupAt:(NSPoint)point {
 	if (![apps count] && !defName) return NO;
 	menu = [[NSMenu alloc] initWithTitle:@"Open With"];
 
@@ -198,7 +194,7 @@ QString strNeedToRefresh2() {
 	NSMenuItem *item = [menu insertItemWithTitle:Q2NSString(tr::lng_mac_choose_program_menu(tr::now)) action:@selector(itemChosen:) keyEquivalent:@"" atIndex:index++];
 	[item setTarget:self];
 
-	[menu popUpMenuPositioningItem:nil atLocation:CGPointMake(x, y) inView:nil];
+	[menu popUpMenuPositioningItem:nil atLocation:point inView:nil];
 
 	return YES;
 }
@@ -384,8 +380,8 @@ namespace File {
 
 QString UrlToLocal(const QUrl &url) {
 	auto result = url.toLocalFile();
-	if (result.startsWith(qsl("/.file/id="))) {
-		NSString *nsurl = [[[NSURL URLWithString: [NSString stringWithUTF8String: (qsl("file://") + result).toUtf8().constData()]] filePathURL] path];
+	if (result.startsWith(u"/.file/id="_q)) {
+		NSString *nsurl = [[[NSURL URLWithString: [NSString stringWithUTF8String: (u"file://"_q + result).toUtf8().constData()]] filePathURL] path];
 		if (!nsurl) return QString();
 
 		return NS2QString(nsurl);
@@ -393,20 +389,13 @@ QString UrlToLocal(const QUrl &url) {
 	return result;
 }
 
-bool UnsafeShowOpenWithDropdown(const QString &filepath, QPoint menuPosition) {
+bool UnsafeShowOpenWithDropdown(const QString &filepath) {
 	@autoreleasepool {
 
 	NSString *file = Q2NSString(filepath);
 	@try {
 		OpenFileWithInterface *menu = [[[OpenFileWithInterface alloc] init:file] autorelease];
-		const auto screen = base::QScreenNearestTo(menuPosition);
-		if (!screen) {
-			return false;
-		}
-		const auto r = screen->geometry();
-		auto x = menuPosition.x();
-		auto y = r.y() + r.height() - menuPosition.y();
-		return !![menu popupAtX:x andY:y];
+		return !![menu popupAt:[NSEvent mouseLocation]];
 	}
 	@catch (NSException *exception) {
 	}
@@ -525,7 +514,7 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 		NSArray *appsPaths = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationDirectory inDomains:NSLocalDomainMask];
 		if ([appsPaths count]) [openPanel setDirectoryURL:[appsPaths firstObject]];
 		[openPanel beginWithCompletionHandler:^(NSInteger result){
-			if (result == NSFileHandlingPanelOKButton) {
+			if (result == NSModalResponseOK) {
 				if ([[openPanel URLs] count] > 0) {
 					NSURL *app = [[openPanel URLs] objectAtIndex:0];
 					NSString *path = [app path];

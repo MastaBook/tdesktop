@@ -20,6 +20,8 @@ namespace Serialize {
 namespace {
 
 constexpr auto kModernImageLocationTag = std::numeric_limits<qint32>::min();
+constexpr auto kVersionTag = uint64(0x77FF'FFFF'FFFF'FFFFULL);
+constexpr auto kVersion = 2;
 
 } // namespace
 
@@ -109,21 +111,28 @@ std::optional<ImageLocation> readImageLocation(
 }
 
 uint32 peerSize(not_null<PeerData*> peer) {
-	uint32 result = sizeof(quint64)
-		+ sizeof(quint64)
-		+ imageLocationSize(peer->userpicLocation());
+	uint32 result = sizeof(quint64) // id
+		+ sizeof(quint64) // version tag
+		+ sizeof(qint32) // version
+		+ sizeof(quint64) // userpic photo id
+		+ imageLocationSize(peer->userpicLocation())
+		+ sizeof(qint32); // userpic has video
 	if (const auto user = peer->asUser()) {
+		const auto botInlinePlaceholder = user->isBot()
+			? user->botInfo->inlinePlaceholder
+			: QString();
 		result += stringSize(user->firstName)
 			+ stringSize(user->lastName)
 			+ stringSize(user->phone())
-			+ stringSize(user->username)
+			+ stringSize(user->username())
 			+ sizeof(quint64) // access
 			+ sizeof(qint32) // flags
-			+ sizeof(qint32) // onlineTill
+			+ stringSize(botInlinePlaceholder)
+			+ sizeof(quint32) // lastseen
 			+ sizeof(qint32) // contact
 			+ sizeof(qint32); // botInfoVersion
 	} else if (const auto chat = peer->asChat()) {
-		result += stringSize(chat->name)
+		result += stringSize(chat->name())
 			+ sizeof(qint32) // count
 			+ sizeof(qint32) // date
 			+ sizeof(qint32) // version
@@ -132,7 +141,7 @@ uint32 peerSize(not_null<PeerData*> peer) {
 			+ sizeof(quint32) // flags
 			+ stringSize(chat->inviteLink());
 	} else if (const auto channel = peer->asChannel()) {
-		result += stringSize(channel->name)
+		result += stringSize(channel->name())
 			+ sizeof(quint64) // access
 			+ sizeof(qint32) // date
 			+ sizeof(qint32) // version
@@ -144,8 +153,13 @@ uint32 peerSize(not_null<PeerData*> peer) {
 }
 
 void writePeer(QDataStream &stream, not_null<PeerData*> peer) {
-	stream << SerializePeerId(peer->id) << quint64(peer->userpicPhotoId());
+	stream
+		<< SerializePeerId(peer->id)
+		<< quint64(kVersionTag)
+		<< qint32(kVersion)
+		<< quint64(peer->userpicPhotoId());
 	writeImageLocation(stream, peer->userpicLocation());
+	stream << qint32(peer->userpicHasVideo() ? 1 : 0);
 	if (const auto user = peer->asUser()) {
 		const auto botInlinePlaceholder = user->isBot()
 			? user->botInfo->inlinePlaceholder
@@ -154,18 +168,18 @@ void writePeer(QDataStream &stream, not_null<PeerData*> peer) {
 			<< user->firstName
 			<< user->lastName
 			<< user->phone()
-			<< user->username
+			<< user->username()
 			<< quint64(user->accessHash())
 			<< qint32(user->flags())
 			<< botInlinePlaceholder
-			<< qint32(user->onlineTill)
+			<< quint32(user->lastseen().serialize())
 			<< qint32(user->isContact() ? 1 : 0)
 			<< qint32(user->isBot() ? user->botInfo->version : -1);
 	} else if (const auto chat = peer->asChat()) {
 		auto field1 = qint32(uint32(chat->creator.bare & 0xFFFFFFFFULL));
 		auto field2 = qint32(uint32(chat->creator.bare >> 32) << 8);
 		stream
-			<< chat->name
+			<< chat->name()
 			<< qint32(chat->count)
 			<< qint32(chat->date)
 			<< qint32(chat->version())
@@ -175,7 +189,7 @@ void writePeer(QDataStream &stream, not_null<PeerData*> peer) {
 			<< chat->inviteLink();
 	} else if (const auto channel = peer->asChannel()) {
 		stream
-			<< channel->name
+			<< channel->name()
 			<< quint64(channel->access)
 			<< qint32(channel->date)
 			<< qint32(0) // legacy - version
@@ -189,11 +203,17 @@ PeerData *readPeer(
 		not_null<Main::Session*> session,
 		int streamAppVersion,
 		QDataStream &stream) {
-	quint64 peerIdSerialized = 0, photoId = 0;
-	stream >> peerIdSerialized >> photoId;
+	quint64 peerIdSerialized = 0, versionTag = 0, photoId = 0;
+	qint32 version = 0, photoHasVideo = 0;
+	stream >> peerIdSerialized >> versionTag;
 	const auto peerId = DeserializePeerId(peerIdSerialized);
 	if (!peerId) {
 		return nullptr;
+	}
+	if (versionTag == kVersionTag) {
+		stream >> version >> photoId;
+	} else {
+		photoId = versionTag;
 	}
 
 	const auto userpic = readImageLocation(streamAppVersion, stream);
@@ -201,20 +221,24 @@ PeerData *readPeer(
 	if (!userpic) {
 		return nullptr;
 	}
+	if (version > 0) {
+		stream >> photoHasVideo;
+	}
 
 	const auto selfId = session->userPeerId();
 	const auto loaded = (peerId == selfId)
 		? session->user().get()
 		: session->data().peerLoaded(peerId);
-	const auto apply = !loaded || !loaded->isFullLoaded();
+	const auto apply = !loaded || !loaded->isLoaded();
 	const auto result = loaded ? loaded : session->data().peer(peerId).get();
 	if (apply) {
-		result->setLoadedStatus(PeerData::LoadedStatus::Full);
+		result->setLoadedStatus(PeerData::LoadedStatus::Normal);
 	}
 	if (const auto user = result->asUser()) {
 		QString first, last, phone, username, inlinePlaceholder;
 		quint64 access;
-		qint32 flags = 0, onlineTill, contact, botInfoVersion;
+		qint32 flags = 0, contact, botInfoVersion;
+		quint32 lastseen;
 		stream >> first >> last >> phone >> username >> access;
 		if (streamAppVersion >= 9012) {
 			stream >> flags;
@@ -222,7 +246,7 @@ PeerData *readPeer(
 		if (streamAppVersion >= 9016) {
 			stream >> inlinePlaceholder;
 		}
-		stream >> onlineTill >> contact >> botInfoVersion;
+		stream >> lastseen >> contact >> botInfoVersion;
 
 		userpicAccessHash = access;
 
@@ -266,7 +290,9 @@ PeerData *readPeer(
 				user->setFlags((user->flags() & ~flagsMask) | flagsSet);
 			}
 			user->setAccessHash(access);
-			user->onlineTill = onlineTill;
+			user->updateLastseen((version > 1)
+				? Data::LastseenStatus::FromSerialized(lastseen)
+				: Data::LastseenStatus::FromLegacy(lastseen));
 			user->setIsContact(contact == 1);
 			user->setBotInfoVersion(botInfoVersion);
 			if (!inlinePlaceholder.isEmpty() && user->isBot()) {
@@ -318,7 +344,6 @@ PeerData *readPeer(
 				};
 				const auto conversions = {
 					Conversion{ Saved::f_left, Flag::Left },
-					Conversion{ Saved::f_kicked, Flag::Kicked },
 					Conversion{ Saved::f_creator, Flag::Creator },
 					Conversion{ Saved::f_deactivated, Flag::Deactivated },
 					Conversion{ Saved(1U << 31), Flag::Forbidden },
@@ -425,20 +450,31 @@ PeerData *readPeer(
 			result->id.value,
 			userpicAccessHash,
 			photoId);
-		result->setUserpic(photoId, location);
+		result->setUserpic(photoId, location, (photoHasVideo == 1));
 	}
 	return result;
 }
 
 QString peekUserPhone(int streamAppVersion, QDataStream &stream) {
-	quint64 peerIdSerialized = 0, photoId = 0;
-	stream >> peerIdSerialized >> photoId;
+	quint64 peerIdSerialized = 0, versionTag = 0, photoId = 0;
+	qint32 version = 0, photoHasVideo = 0;
+	stream >> peerIdSerialized >> versionTag;
 	const auto peerId = DeserializePeerId(peerIdSerialized);
 	DEBUG_LOG(("peekUserPhone.id: %1").arg(peerId.value));
-	if (!peerId
-		|| !peerIsUser(peerId)
-		|| !readImageLocation(streamAppVersion, stream)) {
-		return QString();
+	if (!peerId || !peerIsUser(peerId)) {
+		return nullptr;
+	}
+	if (versionTag == kVersionTag) {
+		stream >> version >> photoId;
+	} else {
+		photoId = versionTag;
+	}
+
+	if (!readImageLocation(streamAppVersion, stream)) {
+		return nullptr;
+	}
+	if (version > 0) {
+		stream >> photoHasVideo;
 	}
 
 	QString first, last, phone;

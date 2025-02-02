@@ -20,10 +20,8 @@ namespace Data {
 
 class DocumentMedia;
 
-[[nodiscard]] QString FileExtension(const QString &filepath);
-// [[nodiscard]] bool IsValidMediaFile(const QString &filepath);
-[[nodiscard]] bool IsExecutableName(const QString &filepath);
-[[nodiscard]] bool IsIpRevealingName(const QString &filepath);
+extern const char kOptionExternalVideoPlayer[];
+
 base::binary_guard ReadBackgroundImageAsync(
 	not_null<Data::DocumentMedia*> media,
 	FnMut<QImage(QImage)> postprocess,
@@ -32,6 +30,7 @@ base::binary_guard ReadBackgroundImageAsync(
 void ResolveDocument(
 	Window::SessionController *controller,
 	not_null<DocumentData*> document,
-	HistoryItem *item);
+	HistoryItem *item,
+	MsgId topicRootId);
 
 } // namespace Data

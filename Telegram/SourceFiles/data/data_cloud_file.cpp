@@ -22,11 +22,12 @@ CloudFile::~CloudFile() {
 	base::take(loader);
 }
 
-void CloudImageView::set(
-		not_null<Main::Session*> session,
-		QImage image) {
-	_image.emplace(std::move(image));
-	session->notifyDownloaderTaskFinished();
+void CloudFile::clear() {
+	location = {};
+	base::take(loader);
+	byteSize = 0;
+	progressivePartSize = 0;
+	flags = {};
 }
 
 CloudImage::CloudImage() = default;
@@ -35,10 +36,6 @@ CloudImage::CloudImage(
 		not_null<Main::Session*> session,
 		const ImageWithLocation &data) {
 	update(session, data);
-}
-
-Image *CloudImageView::image() {
-	return _image ? &*_image : nullptr;
 }
 
 void CloudImage::set(
@@ -52,11 +49,11 @@ void CloudImage::set(
 		_file.location = ImageLocation();
 		_file.byteSize = 0;
 		_file.flags = CloudFile::Flag();
-		_view = std::weak_ptr<CloudImageView>();
+		_view = std::weak_ptr<QImage>();
 	} else if (was != now
 		&& (!v::is<InMemoryLocation>(was) || v::is<InMemoryLocation>(now))) {
 		_file.location = ImageLocation();
-		_view = std::weak_ptr<CloudImageView>();
+		_view = std::weak_ptr<QImage>();
 	}
 	UpdateCloudFile(
 		_file,
@@ -64,10 +61,8 @@ void CloudImage::set(
 		session->data().cache(),
 		kImageCacheTag,
 		[=](FileOrigin origin) { load(session, origin); },
-		[=](QImage preloaded) {
-			if (const auto view = activeView()) {
-				view->set(session, data.preloaded);
-			}
+		[=](QImage preloaded, QByteArray) {
+			setToActive(session, std::move(preloaded));
 		});
 }
 
@@ -80,10 +75,8 @@ void CloudImage::update(
 		session->data().cache(),
 		kImageCacheTag,
 		[=](FileOrigin origin) { load(session, origin); },
-		[=](QImage preloaded) {
-			if (const auto view = activeView()) {
-				view->set(session, data.preloaded);
-			}
+		[=](QImage preloaded, QByteArray) {
+			setToActive(session, std::move(preloaded));
 		});
 }
 
@@ -99,18 +92,22 @@ bool CloudImage::failed() const {
 	return (_file.flags & CloudFile::Flag::Failed);
 }
 
+bool CloudImage::loadedOnce() const {
+	return (_file.flags & CloudFile::Flag::Loaded);
+}
+
 void CloudImage::load(not_null<Main::Session*> session, FileOrigin origin) {
 	const auto autoLoading = false;
 	const auto finalCheck = [=] {
 		if (const auto active = activeView()) {
-			return !active->image();
+			return active->isNull();
+		} else if (_file.flags & CloudFile::Flag::Loaded) {
+			return false;
 		}
-		return true;
+		return !(_file.flags & CloudFile::Flag::Loaded);
 	};
-	const auto done = [=](QImage result) {
-		if (const auto active = activeView()) {
-			active->set(session, std::move(result));
-		}
+	const auto done = [=](QImage result, QByteArray) {
+		setToActive(session, std::move(result));
 	};
 	LoadCloudFile(
 		session,
@@ -131,25 +128,35 @@ int CloudImage::byteSize() const {
 	return _file.byteSize;
 }
 
-std::shared_ptr<CloudImageView> CloudImage::createView() {
+std::shared_ptr<QImage> CloudImage::createView() {
 	if (auto active = activeView()) {
 		return active;
 	}
-	auto view = std::make_shared<CloudImageView>();
+	auto view = std::make_shared<QImage>();
 	_view = view;
 	return view;
 }
 
-std::shared_ptr<CloudImageView> CloudImage::activeView() {
+std::shared_ptr<QImage> CloudImage::activeView() const {
 	return _view.lock();
 }
 
-bool CloudImage::isCurrentView(
-		const std::shared_ptr<CloudImageView> &view) const {
+bool CloudImage::isCurrentView(const std::shared_ptr<QImage> &view) const {
 	if (!view) {
 		return empty();
 	}
 	return !view.owner_before(_view) && !_view.owner_before(view);
+}
+
+void CloudImage::setToActive(
+		not_null<Main::Session*> session,
+		QImage image) {
+	if (const auto view = activeView()) {
+		*view = image.isNull()
+			? Image::Empty()->original()
+			: std::move(image);
+		session->notifyDownloaderTaskFinished();
+	}
 }
 
 void UpdateCloudFile(
@@ -158,19 +165,39 @@ void UpdateCloudFile(
 		Storage::Cache::Database &cache,
 		uint8 cacheTag,
 		Fn<void(FileOrigin)> restartLoader,
-		Fn<void(QImage)> usePreloaded) {
+		Fn<void(QImage, QByteArray)> usePreloaded) {
 	if (!data.location.valid()) {
 		if (data.progressivePartSize && !file.location.valid()) {
 			file.progressivePartSize = data.progressivePartSize;
 		}
+		if (data.location.width()
+			&& data.location.height()
+			&& !file.location.valid()
+			&& !file.location.width()) {
+			file.location = data.location;
+		}
 		return;
 	}
 
+	const auto needStickerThumbnailUpdate = [&] {
+		const auto was = std::get_if<StorageFileLocation>(
+			&file.location.file().data);
+		const auto now = std::get_if<StorageFileLocation>(
+			&data.location.file().data);
+		using Type = StorageFileLocation::Type;
+		if (!was || !now || was->type() != Type::StickerSetThumb) {
+			return false;
+		}
+		return now->valid()
+			&& (now->type() != Type::StickerSetThumb
+				|| now->cacheKey() != was->cacheKey());
+	};
 	const auto update = !file.location.valid()
 		|| (data.location.file().cacheKey()
 			&& (!file.location.file().cacheKey()
 				|| (file.location.width() < data.location.width())
-				|| (file.location.height() < data.location.height())));
+				|| (file.location.height() < data.location.height())
+				|| needStickerThumbnailUpdate()));
 	if (!update) {
 		return;
 	}
@@ -193,11 +220,13 @@ void UpdateCloudFile(
 	if (!data.preloaded.isNull()) {
 		file.loader = nullptr;
 		if (usePreloaded) {
-			usePreloaded(data.preloaded);
+			usePreloaded(data.preloaded, data.bytes);
 		}
 	} else if (file.loader) {
 		const auto origin = base::take(file.loader)->fileOrigin();
 		restartLoader(origin);
+	} else if (file.flags & CloudFile::Flag::Failed) {
+		file.flags &= ~CloudFile::Flag::Failed;
 	}
 }
 
@@ -247,6 +276,7 @@ void LoadCloudFile(
 		if (!file.loader || file.loader->cancelled()) {
 			file.flags |= CloudFile::Flag::Cancelled;
 		} else {
+			file.flags |= CloudFile::Flag::Loaded;
 			done(file);
 		}
 		// NB! file.loader may be in ~FileLoader() already.
@@ -263,11 +293,11 @@ void LoadCloudFile(
 		if (const auto onstack = progress) {
 			onstack();
 		}
-	}, [=, &file](bool started) {
+	}, [=, &file](FileLoader::Error error) {
 		finish(file);
 		file.flags |= CloudFile::Flag::Failed;
 		if (const auto onstack = fail) {
-			onstack(started);
+			onstack(error.started);
 		}
 	}, [=, &file] {
 		finish(file);
@@ -284,7 +314,7 @@ void LoadCloudFile(
 		bool autoLoading,
 		uint8 cacheTag,
 		Fn<bool()> finalCheck,
-		Fn<void(QImage)> done,
+		Fn<void(QImage, QByteArray)> done,
 		Fn<void(bool)> fail,
 		Fn<void()> progress,
 		int downloadFrontPartSize) {
@@ -295,7 +325,7 @@ void LoadCloudFile(
 				onstack(true);
 			}
 		} else if (const auto onstack = done) {
-			onstack(std::move(read));
+			onstack(std::move(read), file.loader->bytes());
 		}
 	};
 	LoadCloudFile(

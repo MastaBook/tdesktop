@@ -12,9 +12,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class Image;
 class FileLoader;
 
+namespace Ui {
+class FrameGenerator;
+} // namespace Ui
+
 namespace Media {
 namespace Clip {
-enum Notification : int;
+enum class Notification;
 class ReaderPointer;
 } // namespace Clip
 } // namespace Media
@@ -74,7 +78,7 @@ public:
 	[[nodiscard]] QByteArray bytes() const;
 	[[nodiscard]] bool loaded(bool check = false) const;
 	[[nodiscard]] float64 progress() const;
-	[[nodiscard]] bool canBePlayed() const;
+	[[nodiscard]] bool canBePlayed(HistoryItem *item) const;
 
 	void automaticLoad(Data::FileOrigin origin, const HistoryItem *item);
 
@@ -111,5 +115,12 @@ private:
 	Flags _flags;
 
 };
+
+[[nodiscard]] auto DocumentIconFrameGenerator(not_null<DocumentMedia*> media)
+-> FnMut<std::unique_ptr<Ui::FrameGenerator>()>;
+
+[[nodiscard]] auto DocumentIconFrameGenerator(
+	const std::shared_ptr<DocumentMedia> &media)
+-> FnMut<std::unique_ptr<Ui::FrameGenerator>()>;
 
 } // namespace Data

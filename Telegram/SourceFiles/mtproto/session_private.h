@@ -13,7 +13,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/connection_abstract.h"
 #include "mtproto/facade.h"
-#include "base/openssl_help.h"
 #include "base/timer.h"
 
 namespace MTP {
@@ -240,6 +239,8 @@ private:
 	crl::time _bindMessageSent = 0;
 
 };
+
+extern const char kOptionPreferIPv6[];
 
 } // namespace details
 } // namespace MTP

@@ -91,6 +91,7 @@ ReaderImplementation::ReadResult FFMpegReaderImplementation::readNextFrame() {
 			_frameMs = 0;
 			_lastReadVideoMs = _lastReadAudioMs = 0;
 			_skippedInvalidDataPackets = 0;
+			_frameIndex = -1;
 
 			continue;
 		} else if (res != AVERROR(EAGAIN)) {
@@ -143,7 +144,11 @@ ReaderImplementation::ReadResult FFMpegReaderImplementation::readNextFrame() {
 }
 
 void FFMpegReaderImplementation::processReadFrame() {
+#if DA_FFMPEG_HAVE_DURATION
+	int64 duration = _frame->duration;
+#else
 	int64 duration = _frame->pkt_duration;
+#endif
 	int64 framePts = _frame->pts;
 	crl::time frameMs = (framePts * 1000LL * _fmtContext->streams[_streamId]->time_base.num) / _fmtContext->streams[_streamId]->time_base.den;
 	_currentFrameDelay = _nextFrameDelay;
@@ -162,6 +167,7 @@ void FFMpegReaderImplementation::processReadFrame() {
 
 	_hadFrame = _frameRead = true;
 	_frameTime += _currentFrameDelay;
+	++_frameIndex;
 }
 
 ReaderImplementation::ReadResult FFMpegReaderImplementation::readFramesTill(crl::time frameMs, crl::time systemMs) {
@@ -188,14 +194,27 @@ crl::time FFMpegReaderImplementation::framePresentationTime() const {
 }
 
 crl::time FFMpegReaderImplementation::durationMs() const {
-	if (_fmtContext->streams[_streamId]->duration == AV_NOPTS_VALUE) return 0;
-	return (_fmtContext->streams[_streamId]->duration * 1000LL * _fmtContext->streams[_streamId]->time_base.num) / _fmtContext->streams[_streamId]->time_base.den;
+	const auto rebase = [](int64_t duration, const AVRational &base) {
+		return (duration * 1000LL * base.num) / base.den;
+	};
+	const auto stream = _fmtContext->streams[_streamId];
+	if (stream->duration != AV_NOPTS_VALUE) {
+		return rebase(stream->duration, stream->time_base);
+	} else if (_fmtContext->duration != AV_NOPTS_VALUE) {
+		return rebase(_fmtContext->duration, AVRational{ 1, AV_TIME_BASE });
+	}
+	return 0;
 }
 
-bool FFMpegReaderImplementation::renderFrame(QImage &to, bool &hasAlpha, const QSize &size) {
+bool FFMpegReaderImplementation::renderFrame(
+		QImage &to,
+		bool &hasAlpha,
+		int &index,
+		const QSize &size) {
 	Expects(_frameRead);
-	_frameRead = false;
 
+	_frameRead = false;
+	index = _frameIndex;
 	if (!_width || !_height) {
 		_width = _frame->width;
 		_height = _frame->height;
@@ -211,8 +230,12 @@ bool FFMpegReaderImplementation::renderFrame(QImage &to, bool &hasAlpha, const Q
 	if (to.isNull() || to.size() != toSize || !to.isDetached() || !isAlignedImage(to)) {
 		to = createAlignedImage(toSize);
 	}
-	hasAlpha = (_frame->format == AV_PIX_FMT_BGRA || (_frame->format == -1 && _codecContext->pix_fmt == AV_PIX_FMT_BGRA));
-	if (_frame->width == toSize.width() && _frame->height == toSize.height() && hasAlpha) {
+	const auto format = (_frame->format == AV_PIX_FMT_NONE)
+		? _codecContext->pix_fmt
+		: _frame->format;
+	const auto bgra = (format == AV_PIX_FMT_BGRA);
+	hasAlpha = bgra || (format == AV_PIX_FMT_YUVA420P);
+	if (_frame->width == toSize.width() && _frame->height == toSize.height() && bgra) {
 		int32 sbpl = _frame->linesize[0], dbpl = to.bytesPerLine(), bpl = qMin(sbpl, dbpl);
 		uchar *s = _frame->data[0], *d = to.bits();
 		for (int32 i = 0, l = _frame->height; i < l; ++i) {
@@ -225,7 +248,7 @@ bool FFMpegReaderImplementation::renderFrame(QImage &to, bool &hasAlpha, const Q
 		}
 		// AV_NUM_DATA_POINTERS defined in AVFrame struct
 		uint8_t *toData[AV_NUM_DATA_POINTERS] = { to.bits(), nullptr };
-		int toLinesize[AV_NUM_DATA_POINTERS] = { to.bytesPerLine(), 0 };
+		int toLinesize[AV_NUM_DATA_POINTERS] = { int(to.bytesPerLine()), 0 };
 		sws_scale(_swsContext, _frame->data, _frame->linesize, 0, _frame->height, toData, toLinesize);
 	}
 	if (hasAlpha) {
@@ -264,7 +287,7 @@ bool FFMpegReaderImplementation::start(Mode mode, crl::time &positionMs) {
 		return false;
 	}
 	_ioBuffer = (uchar*)av_malloc(FFmpeg::kAVBlockSize);
-	_ioContext = avio_alloc_context(_ioBuffer, FFmpeg::kAVBlockSize, 0, static_cast<void*>(this), &FFMpegReaderImplementation::_read, nullptr, &FFMpegReaderImplementation::_seek);
+	_ioContext = avio_alloc_context(_ioBuffer, FFmpeg::kAVBlockSize, 0, static_cast<void*>(this), &FFMpegReaderImplementation::Read, nullptr, &FFMpegReaderImplementation::Seek);
 	_fmtContext = avformat_alloc_context();
 	if (!_fmtContext) {
 		LOG(("Gif Error: Unable to avformat_alloc_context %1").arg(logData()));
@@ -315,8 +338,11 @@ bool FFMpegReaderImplementation::start(Mode mode, crl::time &positionMs) {
 	_codecContext->pkt_timebase = _fmtContext->streams[_streamId]->time_base;
 	av_opt_set_int(_codecContext, "refcounted_frames", 1, 0);
 
-	const auto codec = avcodec_find_decoder(_codecContext->codec_id);
-
+	const auto codec = FFmpeg::FindDecoder(_codecContext);
+	if (!codec) {
+		LOG(("Gif Error: Unable to avcodec_find_decoder %1").arg(logData()));
+		return false;
+	}
 	if (_mode == Mode::Inspecting) {
 		const auto audioStreamId = av_find_best_stream(_fmtContext, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
 		_hasAudioStream = (audioStreamId >= 0);
@@ -391,6 +417,19 @@ bool FFMpegReaderImplementation::isGifv() const {
 	return true;
 }
 
+bool FFMpegReaderImplementation::isWebmSticker() const {
+	if (_hasAudioStream) {
+		return false;
+	}
+	if (dataSize() > kMaxInMemory) {
+		return false;
+	}
+	if (_codecContext->codec_id != AV_CODEC_ID_VP9) {
+		return false;
+	}
+	return true;
+}
+
 QString FFMpegReaderImplementation::logData() const {
 	return u"for file '%1', data size '%2'"_q.arg(_location ? _location->name() : QString()).arg(_data->size());
 }
@@ -449,12 +488,17 @@ FFMpegReaderImplementation::PacketResult FFMpegReaderImplementation::readAndProc
 	return result;
 }
 
-int FFMpegReaderImplementation::_read(void *opaque, uint8_t *buf, int buf_size) {
+int FFMpegReaderImplementation::Read(void *opaque, uint8_t *buf, int buf_size) {
 	FFMpegReaderImplementation *l = reinterpret_cast<FFMpegReaderImplementation*>(opaque);
-	return int(l->_device->read((char*)(buf), buf_size));
+	int ret = l->_device->read((char*)(buf), buf_size);
+	switch (ret) {
+	case -1: return AVERROR_EXTERNAL;
+	case 0: return AVERROR_EOF;
+	default: return ret;
+	}
 }
 
-int64_t FFMpegReaderImplementation::_seek(void *opaque, int64_t offset, int whence) {
+int64_t FFMpegReaderImplementation::Seek(void *opaque, int64_t offset, int whence) {
 	FFMpegReaderImplementation *l = reinterpret_cast<FFMpegReaderImplementation*>(opaque);
 
 	switch (whence) {

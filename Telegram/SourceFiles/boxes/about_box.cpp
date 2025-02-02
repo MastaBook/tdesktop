@@ -10,11 +10,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/text/text_utilities.h"
 #include "base/platform/base_platform_info.h"
+#include "core/file_utilities.h"
 #include "core/click_handler_types.h"
 #include "core/update_checker.h"
 #include "core/application.h"
@@ -64,7 +65,7 @@ AboutBox::AboutBox(QWidget *parent)
 }
 
 void AboutBox::prepare() {
-	setTitle(rpl::single(qsl("Telegram Desktop")));
+	setTitle(rpl::single(u"Telegram Desktop"_q));
 
 	addButton(tr::lng_close(), [this] { closeBox(); });
 
@@ -80,33 +81,45 @@ void AboutBox::prepare() {
 void AboutBox::resizeEvent(QResizeEvent *e) {
 	BoxContent::resizeEvent(e);
 
+	const auto available = width()
+		- st::boxPadding.left()
+		- st::boxPadding.right();
 	_version->moveToLeft(st::boxPadding.left(), st::aboutVersionTop);
+	_text1->resizeToWidth(available);
 	_text1->moveToLeft(st::boxPadding.left(), st::aboutTextTop);
+	_text2->resizeToWidth(available);
 	_text2->moveToLeft(st::boxPadding.left(), _text1->y() + _text1->height() + st::aboutSkip);
+	_text3->resizeToWidth(available);
 	_text3->moveToLeft(st::boxPadding.left(), _text2->y() + _text2->height() + st::aboutSkip);
 }
 
 void AboutBox::showVersionHistory() {
 	if (cRealAlphaVersion()) {
-		auto url = qsl("https://tdesktop.com/");
+		auto url = u"https://tdesktop.com/"_q;
 		if (Platform::IsWindows32Bit()) {
-			url += qsl("win/%1.zip");
+			url += u"win/%1.zip"_q;
 		} else if (Platform::IsWindows64Bit()) {
-			url += qsl("win64/%1.zip");
+			url += u"win64/%1.zip"_q;
+		} else if (Platform::IsWindowsARM64()) {
+			url += u"winarm/%1.zip"_q;
 		} else if (Platform::IsMac()) {
-			url += qsl("mac/%1.zip");
+			url += u"mac/%1.zip"_q;
 		} else if (Platform::IsLinux()) {
-			url += qsl("linux/%1.tar.xz");
+			url += u"linux/%1.tar.xz"_q;
 		} else {
 			Unexpected("Platform value.");
 		}
-		url = url.arg(qsl("talpha%1_%2").arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
+		url = url.arg(u"talpha%1_%2"_q.arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
 
 		QGuiApplication::clipboard()->setText(url);
 
-		Ui::show(Box<InformBox>("The link to the current private alpha version of Telegram Desktop was copied to the clipboard."));
+		getDelegate()->show(
+			Ui::MakeInformBox(
+				"The link to the current private alpha "
+				"version of Telegram Desktop was copied to the clipboard."),
+			Ui::LayerOption::CloseOther);
 	} else {
-		UrlClickHandler::Open(Core::App().changelogLink());
+		File::OpenUrl(Core::App().changelogLink());
 	}
 }
 
@@ -119,7 +132,7 @@ void AboutBox::keyPressEvent(QKeyEvent *e) {
 }
 
 QString telegramFaqLink() {
-	const auto result = qsl("https://telegram.org/faq");
+	const auto result = u"https://telegram.org/faq"_q;
 	const auto langpacked = [&](const char *language) {
 		return result + '/' + language;
 	};
@@ -129,7 +142,7 @@ QString telegramFaqLink() {
 			return langpacked(language);
 		}
 	}
-	if (current.startsWith(qstr("pt-br"))) {
+	if (current.startsWith(u"pt-br"_q)) {
 		return langpacked("br");
 	}
 	return result;
@@ -138,12 +151,14 @@ QString telegramFaqLink() {
 QString currentVersionText() {
 	auto result = QString::fromLatin1(AppVersionStr);
 	if (cAlphaVersion()) {
-		result += qsl(" alpha %1").arg(cAlphaVersion() % 1000);
+		result += u" alpha %1"_q.arg(cAlphaVersion() % 1000);
 	} else if (AppBetaVersion) {
 		result += " beta";
 	}
 	if (Platform::IsWindows64Bit()) {
 		result += " x64";
+	} else if (Platform::IsWindowsARM64()) {
+		result += " arm64";
 	}
 	return result;
 }

@@ -15,6 +15,10 @@ class SharedMediaWithLastSlice;
 class UserPhotosSlice;
 struct WebPageCollage;
 
+namespace Data {
+struct Invoice;
+} // namespace Data
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -65,7 +69,7 @@ public:
 	bool hidden() const;
 	void checkForAnimationStart();
 
-	void paint(Painter &p, int x, int y, int outerWidth);
+	void paint(QPainter &p, int x, int y, int outerWidth);
 	ClickHandlerPtr getState(QPoint point) const;
 
 	rpl::producer<QRect> updateRequests() const {
@@ -108,6 +112,10 @@ private:
 	std::unique_ptr<Thumb> createThumb(
 		Key key,
 		const WebPageCollage &collage,
+		int index);
+	std::unique_ptr<Thumb> createThumb(
+		Key key,
+		const Data::Invoice &invoice,
 		int index);
 	std::unique_ptr<Thumb> createThumb(Key key, not_null<PhotoData*> photo);
 	std::unique_ptr<Thumb> createThumb(

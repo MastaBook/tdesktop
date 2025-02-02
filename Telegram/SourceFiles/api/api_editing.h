@@ -9,6 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class HistoryItem;
 
+namespace Data {
+struct WebPageDraft;
+} // namespace Data
+
 namespace MTP {
 class Error;
 } // namespace MTP
@@ -16,6 +20,7 @@ class Error;
 namespace Api {
 
 struct SendOptions;
+struct RemoteFileInfo;
 
 const auto kDefaultEditMessagesErrors = {
 	u"MESSAGE_ID_INVALID"_q,
@@ -29,29 +34,28 @@ void RescheduleMessage(
 
 void EditMessageWithUploadedDocument(
 	HistoryItem *item,
-	const MTPInputFile &file,
-	const std::optional<MTPInputFile> &thumb,
-	SendOptions options,
-	std::vector<MTPInputDocument> attachedStickers);
+	RemoteFileInfo info,
+	SendOptions options);
 
 void EditMessageWithUploadedPhoto(
 	HistoryItem *item,
-	const MTPInputFile &file,
-	SendOptions options,
-	std::vector<MTPInputDocument> attachedStickers);
+	RemoteFileInfo info,
+	SendOptions options);
 
 mtpRequestId EditCaption(
 	not_null<HistoryItem*> item,
 	const TextWithEntities &caption,
 	SendOptions options,
-	Fn<void(const MTPUpdates &)> done,
-	Fn<void(const MTP::Error &)> fail);
+	Fn<void()> done,
+	Fn<void(const QString &)> fail);
 
 mtpRequestId EditTextMessage(
 	not_null<HistoryItem*> item,
 	const TextWithEntities &caption,
+	Data::WebPageDraft webpage,
 	SendOptions options,
-	Fn<void(const MTPUpdates &, mtpRequestId requestId)> done,
-	Fn<void(const MTP::Error &, mtpRequestId requestId)> fail);
+	Fn<void(mtpRequestId requestId)> done,
+	Fn<void(const QString &error, mtpRequestId requestId)> fail,
+	bool spoilered);
 
 } // namespace Api

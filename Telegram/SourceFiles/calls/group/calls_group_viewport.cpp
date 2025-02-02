@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_pip.h"
 #include "base/platform/base_platform_info.h"
 #include "webrtc/webrtc_video_track.h"
+#include "ui/integration.h"
 #include "ui/painter.h"
 #include "ui/abstract_button.h"
 #include "ui/gl/gl_surface.h"
@@ -26,7 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_calls.h"
 
 #include <QtGui/QtEvents>
-#include <QtGui/QOpenGLShader>
+#include <QOpenGLShader>
 
 namespace Calls::Group {
 namespace {
@@ -104,13 +105,17 @@ void Viewport::setup() {
 	}, lifetime());
 }
 
-void Viewport::setGeometry(QRect geometry) {
+void Viewport::setGeometry(bool fullscreen, QRect geometry) {
 	Expects(wide());
 
+	const auto changed = (_fullscreen != fullscreen);
+	if (changed) {
+		_fullscreen = fullscreen;
+	}
 	if (widget()->geometry() != geometry) {
 		_geometryStaleAfterModeChange = false;
 		widget()->setGeometry(geometry);
-	} else if (_geometryStaleAfterModeChange) {
+	} else if (_geometryStaleAfterModeChange || changed) {
 		_geometryStaleAfterModeChange = false;
 		updateTilesGeometry();
 	}
@@ -222,17 +227,26 @@ void Viewport::setControlsShown(float64 shown) {
 	widget()->update();
 }
 
+void Viewport::setCursorShown(bool shown) {
+	if (_cursorHidden == shown) {
+		_cursorHidden = !shown;
+		updateCursor();
+	}
+}
+
 void Viewport::add(
 		const VideoEndpoint &endpoint,
 		VideoTileTrack track,
 		rpl::producer<QSize> trackSize,
-		rpl::producer<bool> pinned) {
+		rpl::producer<bool> pinned,
+		bool self) {
 	_tiles.push_back(std::make_unique<VideoTile>(
 		endpoint,
 		track,
 		std::move(trackSize),
 		std::move(pinned),
-		[=] { widget()->update(); }));
+		[=] { widget()->update(); },
+		self));
 
 	_tiles.back()->trackSizeValue(
 	) | rpl::filter([](QSize size) {
@@ -461,15 +475,15 @@ Viewport::Layout Viewport::countWide(int outerWidth, int outerHeight) const {
 		const auto columns = slices;
 		const auto sizew = (outerWidth + skip) / float64(columns);
 		for (auto column = 0; column != columns; ++column) {
-			const auto left = int(std::round(column * sizew));
-			const auto width = int(std::round(column * sizew + sizew - skip))
-				- left;
-			const auto rows = int(std::round((count - index)
+			const auto left = int(base::SafeRound(column * sizew));
+			const auto width = int(
+				base::SafeRound(column * sizew + sizew - skip)) - left;
+			const auto rows = int(base::SafeRound((count - index)
 				/ float64(columns - column)));
 			const auto sizeh = (outerHeight + skip) / float64(rows);
 			for (auto row = 0; row != rows; ++row) {
-				const auto top = int(std::round(row * sizeh));
-				const auto height = int(std::round(
+				const auto top = int(base::SafeRound(row * sizeh));
+				const auto height = int(base::SafeRound(
 					row * sizeh + sizeh - skip)) - top;
 				auto &geometry = sizes[index];
 				geometry.columns = {
@@ -493,15 +507,15 @@ Viewport::Layout Viewport::countWide(int outerWidth, int outerHeight) const {
 		const auto rows = slices;
 		const auto sizeh = (outerHeight + skip) / float64(rows);
 		for (auto row = 0; row != rows; ++row) {
-			const auto top = int(std::round(row * sizeh));
-			const auto height = int(std::round(row * sizeh + sizeh - skip))
-				- top;
-			const auto columns = int(std::round((count - index)
+			const auto top = int(base::SafeRound(row * sizeh));
+			const auto height = int(
+				base::SafeRound(row * sizeh + sizeh - skip)) - top;
+			const auto columns = int(base::SafeRound((count - index)
 				/ float64(rows - row)));
 			const auto sizew = (outerWidth + skip) / float64(columns);
 			for (auto column = 0; column != columns; ++column) {
-				const auto left = int(std::round(column * sizew));
-				const auto width = int(std::round(
+				const auto left = int(base::SafeRound(column * sizew));
+				const auto width = int(base::SafeRound(
 					column * sizew + sizew - skip)) - left;
 				auto &geometry = sizes[index];
 				geometry.rows = {
@@ -722,7 +736,7 @@ void Viewport::updateTilesGeometryColumn(int outerWidth) {
 	};
 	const auto topPeer = _large ? _large->row()->peer().get() : nullptr;
 	const auto reorderNeeded = [&] {
-		if (!_large) {
+		if (!topPeer) {
 			return false;
 		}
 		for (const auto &tile : _tiles) {
@@ -794,7 +808,11 @@ void Viewport::setSelected(Selection value) {
 
 void Viewport::updateCursor() {
 	const auto pointer = _selected.tile && (!wide() || _hasTwoOrMore);
-	widget()->setCursor(pointer ? style::cur_pointer : style::cur_default);
+	widget()->setCursor(_cursorHidden
+		? Qt::BlankCursor
+		: pointer
+		? style::cur_pointer
+		: style::cur_default);
 }
 
 void Viewport::setPressed(Selection value) {
@@ -847,53 +865,6 @@ rpl::lifetime &Viewport::lifetime() {
 	return _content->lifetime();
 }
 
-QImage GenerateShadow(
-		int height,
-		int topAlpha,
-		int bottomAlpha,
-		QColor color) {
-	Expects(topAlpha >= 0 && topAlpha < 256);
-	Expects(bottomAlpha >= 0 && bottomAlpha < 256);
-	Expects(height * style::DevicePixelRatio() < 65536);
-
-	const auto base = (uint32(color.red()) << 16)
-		| (uint32(color.green()) << 8)
-		| uint32(color.blue());
-	const auto premultiplied = (topAlpha == bottomAlpha) || !base;
-	auto result = QImage(
-		QSize(1, height * style::DevicePixelRatio()),
-		(premultiplied
-			? QImage::Format_ARGB32_Premultiplied
-			: QImage::Format_ARGB32));
-	if (topAlpha == bottomAlpha) {
-		color.setAlpha(topAlpha);
-		result.fill(color);
-		return result;
-	}
-	constexpr auto kShift = 16;
-	constexpr auto kMultiply = (1U << kShift);
-	const auto values = std::abs(topAlpha - bottomAlpha);
-	const auto rows = uint32(result.height());
-	const auto step = (values * kMultiply) / (rows - 1);
-	const auto till = rows * uint32(step);
-	Assert(result.bytesPerLine() == sizeof(uint32));
-	auto ints = reinterpret_cast<uint32*>(result.bits());
-	if (topAlpha < bottomAlpha) {
-		for (auto i = uint32(0); i != till; i += step) {
-			*ints++ = base | ((topAlpha + (i >> kShift)) << 24);
-		}
-	} else {
-		for (auto i = uint32(0); i != till; i += step) {
-			*ints++ = base | ((topAlpha - (i >> kShift)) << 24);
-		}
-	}
-	if (!premultiplied) {
-		result = std::move(result).convertToFormat(
-			QImage::Format_ARGB32_Premultiplied);
-	}
-	return result;
-}
-
 rpl::producer<QString> MuteButtonTooltip(not_null<GroupCall*> call) {
 	//return rpl::single(std::make_tuple(
 	//	(Data::GroupCall*)nullptr,
@@ -923,6 +894,9 @@ rpl::producer<QString> MuteButtonTooltip(not_null<GroupCall*> call) {
 	//				: tr::lng_group_call_set_reminder();
 	//		}) | rpl::flatten_latest();
 	//	}
+	if (call->rtmp()) {
+		return nullptr;
+	}
 		return call->mutedValue(
 		) | rpl::map([](MuteState muted) {
 			switch (muted) {

@@ -43,7 +43,7 @@ PRIVATE
     smartglocal/smartglocal_error.h
     smartglocal/smartglocal_token.cpp
     smartglocal/smartglocal_token.h
-    
+
     stripe/stripe_pch.h
 )
 
@@ -54,6 +54,7 @@ PUBLIC
 
 target_link_libraries(lib_stripe
 PUBLIC
+    desktop-app::lib_base
     desktop-app::lib_crl
     desktop-app::external_qt
 )

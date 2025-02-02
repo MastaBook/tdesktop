@@ -17,15 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Platform {
 
 class MainWindow : public Window::MainWindow {
-	// The Q_OBJECT meta info is used for qobject_cast!
-	Q_OBJECT
-
 public:
 	explicit MainWindow(not_null<Window::Controller*> controller);
-
-	bool psFilterNativeEvent(void *event);
-
-	virtual QImage iconWithCounter(int size, int count, style::color bg, style::color fg, bool smallIcon) = 0;
 
 	int getCustomTitleHeight() const {
 		return _customTitleHeight;
@@ -35,49 +28,20 @@ public:
 
 	void updateWindowIcon() override;
 
-	void psShowTrayMenu();
+	rpl::producer<QPoint> globalForceClicks() override {
+		return _forceClicks.events();
+	}
 
 	class Private;
-
-public Q_SLOTS:
-	void psMacUndo();
-	void psMacRedo();
-	void psMacCut();
-	void psMacCopy();
-	void psMacPaste();
-	void psMacDelete();
-	void psMacSelectAll();
-	void psMacEmojiAndSymbols();
-
-	void psMacBold();
-	void psMacItalic();
-	void psMacUnderline();
-	void psMacStrikeOut();
-	void psMacMonospace();
-	void psMacClearFormat();
 
 protected:
 	bool eventFilter(QObject *obj, QEvent *evt) override;
 
-	void handleActiveChangedHook() override;
 	void stateChangedHook(Qt::WindowState state) override;
 	void initHook() override;
 	void unreadCounterChangedHook() override;
 
-	bool hasTrayIcon() const override {
-		return trayIcon;
-	}
-
 	void updateGlobalMenuHook() override;
-
-	void workmodeUpdated(Core::Settings::WorkMode mode) override;
-
-	QSystemTrayIcon *trayIcon = nullptr;
-	QMenu *trayIconMenu = nullptr;
-
-	void psTrayMenuUpdated();
-	void psSetupTrayIcon();
-	virtual void placeSmallCounter(QImage &img, int size, int count, style::color bg, const QPoint &shift, style::color color) = 0;
 
 	void closeWithoutDestroy() override;
 	void createGlobalMenu() override;
@@ -85,9 +49,13 @@ protected:
 private:
 	friend class Private;
 
+	bool nativeEvent(
+		const QByteArray &eventType,
+		void *message,
+		qintptr *result) override;
+
 	void hideAndDeactivate();
-	void updateIconCounters();
-	[[nodiscard]] QIcon generateIconForTray(int counter, bool muted) const;
+	void updateDockCounter();
 
 	std::unique_ptr<Private> _private;
 
@@ -95,8 +63,6 @@ private:
 	mutable QTimer psIdleTimer;
 
 	base::Timer _hideAfterFullScreenTimer;
-
-	rpl::variable<bool> _canApplyMarkdown;
 
 	QMenuBar psMainMenu;
 	QAction *psLogout = nullptr;
@@ -117,11 +83,18 @@ private:
 	QAction *psItalic = nullptr;
 	QAction *psUnderline = nullptr;
 	QAction *psStrikeOut = nullptr;
+	QAction *psBlockquote = nullptr;
 	QAction *psMonospace = nullptr;
 	QAction *psClearFormat = nullptr;
 
+	rpl::event_stream<QPoint> _forceClicks;
 	int _customTitleHeight = 0;
+	int _lastPressureStage = 0;
 
 };
+
+[[nodiscard]] inline int32 ScreenNameChecksum(const QString &name) {
+	return Window::DefaultScreenNameChecksum(name);
+}
 
 } // namespace Platform

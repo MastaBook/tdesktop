@@ -7,12 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/url_auth_box.h"
 
+#include "boxes/abstract_box.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "core/click_handler_types.h"
+#include "ui/text/text_utilities.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/labels.h"
@@ -32,7 +34,7 @@ void UrlAuthBox::Activate(
 		itemId,
 		row,
 		column);
-	if (button->requestId || !IsServerMsgId(itemId.msg)) {
+	if (button->requestId || !message->isRegular()) {
 		return;
 	}
 	const auto session = &message->history()->session();
@@ -67,7 +69,7 @@ void UrlAuthBox::Activate(
 				Request(data, item, row, column);
 			}
 		});
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		const auto button = HistoryMessageMarkupButton::Get(
 			&session->data(),
 			itemId,
@@ -105,7 +107,7 @@ void UrlAuthBox::Activate(
 		}, [&](const MTPDurlAuthResultRequest &data) {
 			Request(data, session, url, context);
 		});
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		HiddenUrlClickHandler::Open(url, context);
 	}).send();
 }
@@ -121,7 +123,7 @@ void UrlAuthBox::Request(
 		itemId,
 		row,
 		column);
-	if (button->requestId || !IsServerMsgId(itemId.msg)) {
+	if (button->requestId || !message->isRegular()) {
 		return;
 	}
 	const auto session = &message->history()->session();
@@ -165,7 +167,7 @@ void UrlAuthBox::Request(
 					return url;
 				});
 				finishWithUrl(to);
-			}).fail([=](const MTP::Error &error) {
+			}).fail([=] {
 				finishWithUrl(url);
 			}).send();
 		}
@@ -216,7 +218,7 @@ void UrlAuthBox::Request(
 					return url;
 				});
 				finishWithUrl(to);
-			}).fail([=](const MTP::Error &error) {
+			}).fail([=] {
 				finishWithUrl(url);
 			}).send();
 		}
@@ -255,11 +257,11 @@ not_null<Ui::RpWidget*> UrlAuthBox::setupContent(
 			tr::lng_url_auth_open_confirm(tr::now, lt_link, url),
 			st::boxLabel),
 		st::boxPadding);
-	const auto addCheckbox = [&](const QString &text) {
+	const auto addCheckbox = [&](const TextWithEntities &text) {
 		const auto checkbox = result->add(
 			object_ptr<Ui::Checkbox>(
 				result,
-				QString(),
+				text,
 				true,
 				st::urlAuthCheckbox),
 			style::margins(
@@ -268,23 +270,22 @@ not_null<Ui::RpWidget*> UrlAuthBox::setupContent(
 				st::boxPadding.right(),
 				st::boxPadding.bottom()));
 		checkbox->setAllowTextLines();
-		checkbox->setText(text, true);
 		return checkbox;
 	};
 	const auto auth = addCheckbox(
 		tr::lng_url_auth_login_option(
 			tr::now,
 			lt_domain,
-			textcmdStartSemibold() + domain + textcmdStopSemibold(),
+			Ui::Text::Bold(domain),
 			lt_user,
-			(textcmdStartSemibold()
-				+ session->user()->name
-				+ textcmdStopSemibold())));
+			Ui::Text::Bold(session->user()->name()),
+			Ui::Text::WithEntities));
 	const auto allow = bot
 		? addCheckbox(tr::lng_url_auth_allow_messages(
 			tr::now,
 			lt_bot,
-			textcmdStartSemibold() + bot->firstName + textcmdStopSemibold()))
+			Ui::Text::Bold(bot->firstName),
+			Ui::Text::WithEntities))
 		: nullptr;
 	if (allow) {
 		rpl::single(

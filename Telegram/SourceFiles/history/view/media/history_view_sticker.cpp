@@ -14,34 +14,34 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
+#include "history/view/media/history_view_sticker_player.h"
 #include "ui/image/image.h"
 #include "ui/chat/chat_style.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/text/custom_emoji_instance.h"
 #include "ui/emoji_config.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/click_handler_types.h"
-#include "main/main_session.h"
-#include "main/main_account.h"
-#include "main/main_app_config.h"
-#include "window/window_session_controller.h" // isGifPausedAtLeastFor.
+#include "window/window_session_controller.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_file_origin.h"
-#include "lottie/lottie_single_player.h"
 #include "chat_helpers/stickers_lottie.h"
 #include "styles/style_chat.h"
 
 namespace HistoryView {
 namespace {
 
-[[nodiscard]] double GetEmojiStickerZoom(not_null<Main::Session*> session) {
-	return session->account().appConfig().get<double>(
-		"emojies_animated_zoom",
-		0.625);
-}
+constexpr auto kMaxSizeFixed = 512;
+constexpr auto kMaxEmojiSizeFixed = 256;
+constexpr auto kPremiumMultiplier = (1 + 0.245 * 2);
+constexpr auto kEmojiMultiplier = 3;
+constexpr auto kMessageEffectMultiplier = 2;
 
 [[nodiscard]] QImage CacheDiceImage(
 		const QString &emoji,
@@ -57,33 +57,67 @@ namespace {
 	return image;
 }
 
+[[nodiscard]] QColor ComputeEmojiTextColor(const PaintContext &context) {
+	const auto st = context.st;
+	const auto result = st->messageStyle(false, false).historyTextFg->c;
+	if (!context.selected()) {
+		return result;
+	}
+	const auto &add = st->msgStickerOverlay()->c;
+
+	const auto ca = add.alpha();
+	const auto ra = 0x100 - ca;
+	const auto aa = ca + 1;
+	const auto red = (result.red() * ra + add.red() * aa) >> 8;
+	const auto green = (result.green() * ra + add.green() * aa) >> 8;
+	const auto blue = (result.blue() * ra + add.blue() * aa) >> 8;
+	return QColor(red, green, blue, result.alpha());
+}
+
 } // namespace
 
 Sticker::Sticker(
 	not_null<Element*> parent,
 	not_null<DocumentData*> data,
+	bool skipPremiumEffect,
 	Element *replacing,
 	const Lottie::ColorReplacements *replacements)
 : _parent(parent)
 , _data(data)
-, _replacements(replacements) {
+, _replacements(replacements)
+, _cachingTag(ChatHelpers::StickerLottieSize::MessageHistory)
+, _skipPremiumEffect(skipPremiumEffect) {
 	if ((_dataMedia = _data->activeMediaView())) {
 		dataMediaCreated();
 	} else {
 		_data->loadThumbnail(parent->data()->fullId());
+		if (hasPremiumEffect()) {
+			_data->loadVideoThumbnail(parent->data()->fullId());
+		}
 	}
 	if (const auto media = replacing ? replacing->media() : nullptr) {
-		_lottie = media->stickerTakeLottie(_data, _replacements);
-		if (_lottie) {
-			lottieCreated();
+		_player = media->stickerTakePlayer(_data, _replacements);
+		if (_player) {
+			if (hasPremiumEffect() && !_premiumEffectPlayed) {
+				_premiumEffectPlayed = true;
+				if (On(PowerSaving::kStickersChat)
+					&& !_premiumEffectSkipped) {
+					_premiumEffectSkipped = true;
+				} else {
+					_parent->delegate()->elementStartPremium(
+						_parent,
+						replacing);
+				}
+			}
+			playerCreated();
 		}
 	}
 }
 
 Sticker::~Sticker() {
-	if (_lottie || _dataMedia) {
-		if (_lottie) {
-			unloadLottie();
+	if (_player || _dataMedia) {
+		if (_player) {
+			unloadPlayer();
 		}
 		if (_dataMedia) {
 			_data->owner().keepAlive(base::take(_dataMedia));
@@ -92,32 +126,48 @@ Sticker::~Sticker() {
 	}
 }
 
-bool Sticker::isEmojiSticker() const {
-	return (_parent->data()->media() == nullptr);
+bool Sticker::hasPremiumEffect() const {
+	return !_skipPremiumEffect && _data->isPremiumSticker();
 }
 
-void Sticker::initSize() {
-	_size = _data->dimensions;
-	if (isEmojiSticker() || _diceIndex >= 0) {
-		_size = GetAnimatedEmojiSize(&_data->session(), _size);
+bool Sticker::customEmojiPart() const {
+	return _customEmojiPart;
+}
+
+bool Sticker::emojiSticker() const {
+	return _emojiSticker;
+}
+
+bool Sticker::webpagePart() const {
+	return _webpagePart;
+}
+
+void Sticker::initSize(int customSize) {
+	if (customSize > 0) {
+		const auto original = Size(_data);
+		const auto proposed = QSize{ customSize, customSize };
+		_size = original.isEmpty()
+			? proposed
+			: DownscaledSize(original, proposed);
+	} else if (emojiSticker() || _diceIndex >= 0) {
+		_size = EmojiSize();
 		if (_diceIndex > 0) {
-			[[maybe_unused]] bool result = readyToDrawLottie();
+			[[maybe_unused]] bool result = readyToDrawAnimationFrame();
 		}
 	} else {
-		_size = DownscaledSize(
-			_size,
-			{ st::maxStickerSize, st::maxStickerSize });
+		_size = Size(_data);
 	}
+	_size = DownscaledSize(_size, Size());
 }
 
-QSize Sticker::size() {
+QSize Sticker::countOptimalSize() {
 	if (_size.isEmpty()) {
 		initSize();
 	}
 	return _size;
 }
 
-bool Sticker::readyToDrawLottie() {
+bool Sticker::readyToDrawAnimationFrame() {
 	if (!_lastDiceFrame.isNull()) {
 		return true;
 	}
@@ -129,52 +179,103 @@ bool Sticker::readyToDrawLottie() {
 	ensureDataMediaCreated();
 	_dataMedia->checkStickerLarge();
 	const auto loaded = _dataMedia->loaded();
-	if (sticker->animated && !_lottie && loaded) {
-		setupLottie();
+	const auto waitingForPremium = hasPremiumEffect()
+		&& _dataMedia->videoThumbnailContent().isEmpty();
+	if (!_player && loaded && !waitingForPremium && sticker->isAnimated()) {
+		setupPlayer();
 	}
-	return (_lottie && _lottie->ready());
+	return ready();
 }
 
-QSize Sticker::GetAnimatedEmojiSize(not_null<Main::Session*> session) {
-	return GetAnimatedEmojiSize(session, { 512, 512 });
+QSize Sticker::Size() {
+	const auto side = std::min(st::maxStickerSize, kMaxSizeFixed);
+	return { side, side };
 }
 
-QSize Sticker::GetAnimatedEmojiSize(
-		not_null<Main::Session*> session,
-		QSize documentSize) {
-	const auto zoom = GetEmojiStickerZoom(session);
-	const auto convert = [&](int size) {
-		return int(size * st::maxStickerSize * zoom / kStickerSideSize);
-	};
-	return { convert(documentSize.width()), convert(documentSize.height()) };
+QSize Sticker::Size(not_null<DocumentData*> document) {
+	return DownscaledSize(document->dimensions, Size());
+}
+
+QSize Sticker::PremiumEffectSize(not_null<DocumentData*> document) {
+	return Size(document) * kPremiumMultiplier;
+}
+
+QSize Sticker::UsualPremiumEffectSize() {
+	return DownscaledSize({ kMaxSizeFixed, kMaxSizeFixed }, Size())
+		* kPremiumMultiplier;
+}
+
+QSize Sticker::EmojiEffectSize() {
+	return EmojiSize() * kEmojiMultiplier;
+}
+
+QSize Sticker::MessageEffectSize() {
+	return EmojiSize() * kMessageEffectMultiplier;
+}
+
+QSize Sticker::EmojiSize() {
+	const auto side = std::min(st::maxAnimatedEmojiSize, kMaxEmojiSizeFixed);
+	return { side, side };
 }
 
 void Sticker::draw(
 		Painter &p,
 		const PaintContext &context,
 		const QRect &r) {
+	if (!customEmojiPart()) {
+		_parent->clearCustomEmojiRepaint();
+	}
+
 	ensureDataMediaCreated();
-	if (readyToDrawLottie()) {
-		paintLottie(p, context, r);
+	if (readyToDrawAnimationFrame()) {
+		paintAnimationFrame(p, context, r);
 	} else if (!_data->sticker()
-		|| (_data->sticker()->animated && _replacements)
+		|| (_data->sticker()->isLottie() && _replacements)
 		|| !paintPixmap(p, context, r)) {
 		paintPath(p, context, r);
 	}
 }
 
-void Sticker::paintLottie(
+ClickHandlerPtr Sticker::link() {
+	return _link;
+}
+
+bool Sticker::ready() const {
+	return _player && _player->ready();
+}
+
+DocumentData *Sticker::document() {
+	return _data;
+}
+
+void Sticker::stickerClearLoopPlayed() {
+	if (!_playingOnce) {
+		_oncePlayed = false;
+	}
+	_premiumEffectSkipped = false;
+}
+
+void Sticker::paintAnimationFrame(
 		Painter &p,
 		const PaintContext &context,
 		const QRect &r) {
-	auto request = Lottie::FrameRequest();
-	request.box = _size * cIntRetinaFactor();
-	if (context.selected() && !_nextLastDiceFrame) {
-		request.colored = context.st->msgStickerOverlay()->c;
-	}
-	const auto frame = _lottie
-		? _lottie->frameInfo(request)
-		: Lottie::Animation::FrameInfo();
+	const auto colored = (customEmojiPart() && _data->emojiUsesTextColor())
+		? ComputeEmojiTextColor(context)
+		: (context.selected() && !_nextLastDiceFrame)
+		? context.st->msgStickerOverlay()->c
+		: QColor(0, 0, 0, 0);
+	const auto powerSavingFlag = (emojiSticker() || _diceIndex >= 0)
+		? PowerSaving::kEmojiChat
+		: PowerSaving::kStickersChat;
+	const auto paused = context.paused || On(powerSavingFlag);
+	const auto frame = _player
+		? _player->frame(
+			_size,
+			colored,
+			mirrorHorizontal(),
+			context.now,
+			paused)
+		: StickerPlayer::FrameInfo();
 	if (_nextLastDiceFrame) {
 		_nextLastDiceFrame = false;
 		_lastDiceFrame = CacheDiceImage(_diceEmoji, _diceIndex, frame.image);
@@ -183,9 +284,11 @@ void Sticker::paintLottie(
 		? frame.image
 		: _lastDiceFrame;
 	const auto prepared = (!_lastDiceFrame.isNull() && context.selected())
-		? Images::prepareColored(context.st->msgStickerOverlay()->c, image)
+		? Images::Colored(
+			base::duplicate(image),
+			context.st->msgStickerOverlay()->c)
 		: image;
-	const auto size = prepared.size() / cIntRetinaFactor();
+	const auto size = prepared.size() / style::DevicePixelRatio();
 	p.drawImage(
 		QRect(
 			QPoint(
@@ -197,30 +300,30 @@ void Sticker::paintLottie(
 		return;
 	}
 
-	const auto paused = _parent->delegate()->elementIsGifPaused();
-	const auto playOnce = (_diceIndex > 0)
-		? true
-		: (_diceIndex == 0)
-		? false
-		: (isEmojiSticker()
-			|| !Core::App().settings().loopAnimatedStickers());
-	const auto count = _lottie->information().framesCount;
+	const auto count = _player->framesCount();
 	_frameIndex = frame.index;
 	_framesCount = count;
 	_nextLastDiceFrame = !paused
 		&& (_diceIndex > 0)
-		&& (frame.index + 2 == count);
+		&& (_frameIndex + 2 == count);
+	const auto playOnce = (_playingOnce || _diceIndex > 0)
+		? true
+		: (_diceIndex == 0)
+		? false
+		: ((!customEmojiPart() && emojiSticker())
+			|| !Core::App().settings().loopAnimatedStickers());
 	const auto lastDiceFrame = (_diceIndex > 0) && atTheEnd();
 	const auto switchToNext = !playOnce
-		|| (!lastDiceFrame && (frame.index != 0 || !_lottieOncePlayed));
+		|| (!lastDiceFrame && (_frameIndex != 0 || !_oncePlayed));
 	if (!paused
 		&& switchToNext
-		&& _lottie->markFrameShown()
+		&& _player->markFrameShown()
 		&& playOnce
-		&& !_lottieOncePlayed) {
-		_lottieOncePlayed = true;
+		&& !_oncePlayed) {
+		_oncePlayed = true;
 		_parent->delegate()->elementStartStickerLoop(_parent);
 	}
+	checkPremiumEffectStart();
 }
 
 bool Sticker::paintPixmap(
@@ -231,11 +334,24 @@ bool Sticker::paintPixmap(
 	if (pixmap.isNull()) {
 		return false;
 	}
-	p.drawPixmap(
-		QPoint(
-			r.x() + (r.width() - _size.width()) / 2,
-			r.y() + (r.height() - _size.height()) / 2),
-		pixmap);
+	const auto size = pixmap.size() / pixmap.devicePixelRatio();
+	const auto position = QPoint(
+		r.x() + (r.width() - size.width()) / 2,
+		r.y() + (r.height() - size.height()) / 2);
+	const auto mirror = mirrorHorizontal();
+	if (mirror) {
+		p.save();
+		const auto middle = QPointF(
+			position.x() + size.width() / 2.,
+			position.y() + size.height() / 2.);
+		p.translate(middle);
+		p.scale(-1., 1.);
+		p.translate(-middle);
+	}
+	p.drawPixmap(position, pixmap);
+	if (mirror) {
+		p.restore();
+	}
 	return true;
 }
 
@@ -244,7 +360,14 @@ void Sticker::paintPath(
 		const PaintContext &context,
 		const QRect &r) {
 	const auto pathGradient = _parent->delegate()->elementPathShiftGradient();
-	if (context.selected()) {
+	auto helper = std::optional<style::owned_color>();
+	if (customEmojiPart() && _data->emojiUsesTextColor()) {
+		helper.emplace(Ui::CustomEmoji::PreviewColorFromTextColor(
+			ComputeEmojiTextColor(context)));
+		pathGradient->overrideColors(helper->color(), helper->color());
+	} else if (webpagePart()) {
+		pathGradient->overrideColors(st::shadowFg, st::shadowFg);
+	} else if (context.selected()) {
 		pathGradient->overrideColors(
 			context.st->msgServiceBgSelected(),
 			context.st->msgServiceBg());
@@ -256,35 +379,63 @@ void Sticker::paintPath(
 		p,
 		_dataMedia.get(),
 		r,
-		pathGradient);
+		pathGradient,
+		mirrorHorizontal());
+	if (helper) {
+		pathGradient->clearOverridenColors();
+	}
 }
 
 QPixmap Sticker::paintedPixmap(const PaintContext &context) const {
-	const auto w = _size.width();
-	const auto h = _size.height();
-	const auto &c = context.st->msgStickerOverlay();
+	auto helper = std::optional<style::owned_color>();
+	const auto sticker = _data->sticker();
+	const auto ratio = style::DevicePixelRatio();
+	const auto adjust = [&](int side) {
+		return (((side * ratio) / 8) * 8) / ratio;
+	};
+	const auto useSize = (sticker && sticker->type == StickerType::Tgs)
+		? QSize(adjust(_size.width()), adjust(_size.height()))
+		: _size;
+	const auto colored = (customEmojiPart() && _data->emojiUsesTextColor())
+		? &helper.emplace(ComputeEmojiTextColor(context)).color()
+		: context.selected()
+		? &context.st->msgStickerOverlay()
+		: nullptr;
 	const auto good = _dataMedia->goodThumbnail();
 	if (const auto image = _dataMedia->getStickerLarge()) {
-		return context.selected()
-			? image->pixColored(c, w, h)
-			: image->pix(w, h);
+		return image->pix(useSize, { .colored = colored });
 	//
 	// Inline thumbnails can't have alpha channel.
 	//
 	//} else if (const auto blurred = _data->thumbnailInline()) {
-	//	return context.selected()
-	//		? blurred->pixBlurredColored(c, w, h)
-	//		: blurred->pixBlurred(w, h);
+	//	return blurred->pix(
+	//		useSize,
+	//		{ .colored = colored, .options = Images::Option::Blur });
 	} else if (good) {
-		return context.selected()
-			? good->pixColored(c, w, h)
-			: good->pix(w, h);
+		return good->pix(useSize, { .colored = colored });
 	} else if (const auto thumbnail = _dataMedia->thumbnail()) {
-		return context.selected()
-			? thumbnail->pixBlurredColored(c, w, h)
-			: thumbnail->pixBlurred(w, h);
+		return thumbnail->pix(
+			useSize,
+			{ .colored = colored, .options = Images::Option::Blur });
 	}
 	return QPixmap();
+}
+
+bool Sticker::mirrorHorizontal() const {
+	if (!hasPremiumEffect()) {
+		return false;
+	}
+	const auto rightAligned = _parent->hasRightLayout();
+	return !rightAligned;
+}
+
+ClickHandlerPtr Sticker::ShowSetHandler(not_null<DocumentData*> document) {
+	return std::make_shared<LambdaClickHandler>([=](ClickContext context) {
+		const auto my = context.other.value<ClickHandlerContext>();
+		if (const auto window = my.sessionWindow.get()) {
+			StickerSetBox::Show(window->uiShow(), document);
+		}
+	});
 }
 
 void Sticker::refreshLink() {
@@ -292,24 +443,24 @@ void Sticker::refreshLink() {
 		return;
 	}
 	const auto sticker = _data->sticker();
-	if (isEmojiSticker()) {
+	if (emojiSticker()) {
 		const auto weak = base::make_weak(this);
 		_link = std::make_shared<LambdaClickHandler>([weak] {
-			const auto that = weak.get();
-			if (!that) {
-				return;
+			if (const auto that = weak.get()) {
+				that->emojiStickerClicked();
 			}
-			that->_lottieOncePlayed = false;
-			that->_parent->history()->owner().requestViewRepaint(
-				that->_parent);
 		});
 	} else if (sticker && sticker->set) {
-		_link = std::make_shared<LambdaClickHandler>([document = _data](ClickContext context) {
-			const auto my = context.other.value<ClickHandlerContext>();
-			if (const auto window = my.sessionWindow.get()) {
-				StickerSetBox::Show(window, document);
-			}
-		});
+		if (hasPremiumEffect()) {
+			const auto weak = base::make_weak(this);
+			_link = std::make_shared<LambdaClickHandler>([weak] {
+				if (const auto that = weak.get()) {
+					that->premiumStickerClicked();
+				}
+			});
+		} else {
+			_link = ShowSetHandler(_data);
+		}
 	} else if (sticker
 		&& (_data->dimensions.width() > kStickerSideSize
 			|| _data->dimensions.height() > kStickerSideSize)
@@ -327,6 +478,23 @@ void Sticker::refreshLink() {
 	}
 }
 
+void Sticker::emojiStickerClicked() {
+	if (_player) {
+		_parent->delegate()->elementStartInteraction(_parent);
+	}
+	_oncePlayed = false;
+	_parent->history()->owner().requestViewRepaint(_parent);
+}
+
+void Sticker::premiumStickerClicked() {
+	_premiumEffectPlayed = false;
+
+	// Remove when we start playing sticker itself on click.
+	_premiumEffectSkipped = false;
+
+	_parent->history()->owner().requestViewRepaint(_parent);
+}
+
 void Sticker::ensureDataMediaCreated() const {
 	if (_dataMedia) {
 		return;
@@ -342,6 +510,9 @@ void Sticker::dataMediaCreated() const {
 	if (_dataMedia->thumbnailPath().isEmpty()) {
 		_dataMedia->thumbnailWanted(_parent->data()->fullId());
 	}
+	if (hasPremiumEffect()) {
+		_data->loadVideoThumbnail(_parent->data()->fullId());
+	}
 	_parent->history()->owner().registerHeavyViewPart(_parent);
 }
 
@@ -350,59 +521,96 @@ void Sticker::setDiceIndex(const QString &emoji, int index) {
 	_diceIndex = index;
 }
 
-void Sticker::setupLottie() {
-	Expects(_dataMedia != nullptr);
-
-	_lottie = ChatHelpers::LottiePlayerFromDocument(
-		_dataMedia.get(),
-		_replacements,
-		ChatHelpers::StickerLottieSize::MessageHistory,
-		size() * cIntRetinaFactor(),
-		Lottie::Quality::High);
-	lottieCreated();
+void Sticker::setPlayingOnce(bool once) {
+	_playingOnce = once;
 }
 
-void Sticker::lottieCreated() {
-	Expects(_lottie != nullptr);
+void Sticker::setCustomCachingTag(ChatHelpers::StickerLottieSize tag) {
+	_cachingTag = tag;
+}
+
+void Sticker::setCustomEmojiPart() {
+	_customEmojiPart = true;
+}
+
+void Sticker::setEmojiSticker() {
+	_emojiSticker = true;
+}
+
+void Sticker::setWebpagePart() {
+	_webpagePart = true;
+}
+
+void Sticker::setupPlayer() {
+	Expects(_dataMedia != nullptr);
+
+	if (_data->sticker()->isLottie()) {
+		_player = std::make_unique<LottiePlayer>(
+			ChatHelpers::LottiePlayerFromDocument(
+				_dataMedia.get(),
+				_replacements,
+				_cachingTag,
+				countOptimalSize() * style::DevicePixelRatio(),
+				Lottie::Quality::High));
+	} else if (_data->sticker()->isWebm()) {
+		_player = std::make_unique<WebmPlayer>(
+			_dataMedia->owner()->location(),
+			_dataMedia->bytes(),
+			countOptimalSize());
+	}
+
+	checkPremiumEffectStart();
+	playerCreated();
+}
+
+void Sticker::checkPremiumEffectStart() {
+	if (!_premiumEffectPlayed && hasPremiumEffect()) {
+		_premiumEffectPlayed = true;
+		if (On(PowerSaving::kStickersChat)
+			&& !_premiumEffectSkipped) {
+			_premiumEffectSkipped = true;
+		} else {
+			_parent->delegate()->elementStartPremium(_parent, nullptr);
+		}
+	}
+}
+
+void Sticker::playerCreated() {
+	Expects(_player != nullptr);
 
 	_parent->history()->owner().registerHeavyViewPart(_parent);
-
-	_lottie->updates(
-	) | rpl::start_with_next([=](Lottie::Update update) {
-		v::match(update.data, [&](const Lottie::Information &information) {
-			_parent->history()->owner().requestViewResize(_parent);
-		}, [&](const Lottie::DisplayFrameRequest &request) {
-			_parent->history()->owner().requestViewRepaint(_parent);
-		});
-	}, _lifetime);
+	_player->setRepaintCallback([=] { _parent->customEmojiRepaint(); });
 }
 
 bool Sticker::hasHeavyPart() const {
-	return _lottie || _dataMedia;
+	return _player || _dataMedia;
 }
 
 void Sticker::unloadHeavyPart() {
-	unloadLottie();
+	unloadPlayer();
 	_dataMedia = nullptr;
 }
 
-void Sticker::unloadLottie() {
-	if (!_lottie) {
+void Sticker::unloadPlayer() {
+	if (!_player) {
 		return;
 	}
 	if (_diceIndex > 0 && _lastDiceFrame.isNull()) {
 		_nextLastDiceFrame = false;
-		_lottieOncePlayed = false;
+		_oncePlayed = false;
 	}
-	_lottie = nullptr;
+	_player = nullptr;
+	if (hasPremiumEffect()) {
+		_parent->delegate()->elementCancelPremium(_parent);
+	}
 	_parent->checkHeavyPart();
 }
 
-std::unique_ptr<Lottie::SinglePlayer> Sticker::stickerTakeLottie(
+std::unique_ptr<StickerPlayer> Sticker::stickerTakePlayer(
 		not_null<DocumentData*> data,
 		const Lottie::ColorReplacements *replacements) {
 	return (data == _data && replacements == _replacements)
-		? std::move(_lottie)
+		? std::move(_player)
 		: nullptr;
 }
 

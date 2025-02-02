@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace MTP {
 
 struct ConfigFields {
+	explicit ConfigFields(Environment environment);
+
 	int chatSizeMax = 200;
 	int megagroupSizeMax = 10000;
 	int forwardedCountMax = 100;
@@ -22,15 +24,11 @@ struct ConfigFields {
 	int onlineCloudTimeout = 300000;
 	int notifyCloudDelay = 30000;
 	int notifyDefaultDelay = 1500;
-	int savedGifsLimit = 200;
 	int editTimeLimit = 172800;
 	int revokeTimeLimit = 172800;
 	int revokePrivateTimeLimit = 172800;
 	bool revokePrivateInbox = false;
 	int stickersRecentLimit = 30;
-	int stickersFavedLimit = 5;
-	rpl::variable<int> pinnedDialogsCountMax = 5;
-	rpl::variable<int> pinnedDialogsInFolderMax = 100;
 	QString internalLinksDomain = u"https://t.me/"_q;
 	int channelsReadMediaPeriod = 86400 * 7;
 	int callReceiveTimeoutMs = 20000;
@@ -39,9 +37,15 @@ struct ConfigFields {
 	int callPacketTimeoutMs = 10000;
 	int webFileDcId = 4;
 	QString txtDomainString;
-	rpl::variable<bool> phoneCallsEnabled = true;
 	bool blockedMode = false;
 	int captionLengthMax = 1024;
+	int ratingDecay = 2419200;
+	QString reactionDefaultEmoji;
+	uint64 reactionDefaultCustom = 0;
+	QString autologinToken;
+
+	QString gifSearchUsername;
+	QString venueSearchUsername;
 };
 
 class Config final {
@@ -76,9 +80,7 @@ public:
 
 	// Set from legacy local stored values.
 	void setChatSizeMax(int value);
-	void setSavedGifsLimit(int value);
 	void setStickersRecentLimit(int value);
-	void setStickersFavedLimit(int value);
 	void setMegagroupSizeMax(int value);
 	void setTxtDomainString(const QString &value);
 

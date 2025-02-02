@@ -18,7 +18,6 @@ TextParseOptions HistoryTextOptions = {
 		| TextParseMentions
 		| TextParseHashtags
 		| TextParseMultiline
-		| TextParseRichText
 		| TextParseMarkdown, // flags
 	0, // maxw
 	0, // maxh
@@ -31,7 +30,6 @@ TextParseOptions HistoryBotOptions = {
 		| TextParseHashtags
 		| TextParseBotCommands
 		| TextParseMultiline
-		| TextParseRichText
 		| TextParseMarkdown, // flags
 	0, // maxw
 	0, // maxh
@@ -41,9 +39,9 @@ TextParseOptions HistoryBotOptions = {
 TextParseOptions HistoryServiceOptions = {
 	TextParseLinks
 		| TextParseMentions
-		| TextParseHashtags
 		//| TextParseMultiline
-		| TextParseRichText, // flags
+		| TextParseHashtags
+		| TextParseMarkdown, // flags
 	0, // maxw
 	0, // maxh
 	Qt::LayoutDirectionAuto, // lang-dependent
@@ -53,8 +51,7 @@ TextParseOptions HistoryTextNoMonoOptions = {
 	TextParseLinks
 		| TextParseMentions
 		| TextParseHashtags
-		| TextParseMultiline
-		| TextParseRichText, // flags
+		| TextParseMultiline, // flags
 	0, // maxw
 	0, // maxh
 	Qt::LayoutDirectionAuto, // dir
@@ -65,8 +62,7 @@ TextParseOptions HistoryBotNoMonoOptions = {
 		| TextParseMentions
 		| TextParseHashtags
 		| TextParseBotCommands
-		| TextParseMultiline
-		| TextParseRichText, // flags
+		| TextParseMultiline, // flags
 	0, // maxw
 	0, // maxh
 	Qt::LayoutDirectionAuto, // dir
@@ -80,14 +76,14 @@ TextParseOptions TextNameOptions = {
 };
 
 TextParseOptions TextDialogOptions = {
-	TextParseRichText, // flags
+	TextParseColorized | TextParseMarkdown, // flags
 	0, // maxw is style-dependent
 	1, // maxh
 	Qt::LayoutDirectionAuto, // lang-dependent
 };
 
 TextParseOptions WebpageTitleOptions = {
-	TextParseMultiline | TextParseRichText, // flags
+	TextParseMultiline, // flags
 	0, // maxw
 	0, // maxh
 	Qt::LayoutDirectionAuto, // dir
@@ -98,7 +94,6 @@ TextParseOptions WebpageDescriptionOptions = {
 		| TextParseMentions
 		| TextParseHashtags
 		| TextParseMultiline
-		| TextParseRichText
 		| TextParseMarkdown, // flags
 	0, // maxw
 	0, // maxh
@@ -108,19 +103,15 @@ TextParseOptions WebpageDescriptionOptions = {
 } // namespace
 
 void InitTextOptions() {
-	HistoryServiceOptions.dir
-		= TextNameOptions.dir
-		= TextDialogOptions.dir
-		= Qt::LeftToRight;
 	TextDialogOptions.maxw = st::columnMaximalWidthLeft * 2;
 	WebpageTitleOptions.maxh = st::webPageTitleFont->height * 2;
 	WebpageTitleOptions.maxw
 		= WebpageDescriptionOptions.maxw
 		= st::msgMaxWidth
 		- st::msgPadding.left()
-		- st::webPageLeft
+		- st::messageQuoteStyle.padding.left()
+		- st::messageQuoteStyle.padding.right()
 		- st::msgPadding.right();
-	WebpageDescriptionOptions.maxh = st::webPageDescriptionFont->height * 3;
 }
 
 const TextParseOptions &ItemTextDefaultOptions() {

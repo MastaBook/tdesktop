@@ -21,7 +21,7 @@ public:
 	Dice(not_null<Element*> parent, not_null<Data::MediaDice*> dice);
 	~Dice();
 
-	QSize size() override;
+	QSize countOptimalSize() override;
 	void draw(
 		Painter &p,
 		const PaintContext &context,
@@ -40,9 +40,6 @@ public:
 		if (_end) {
 			_end->unloadHeavyPart();
 		}
-	}
-	bool hidesForwardedInfo() override {
-		return false;
 	}
 
 private:

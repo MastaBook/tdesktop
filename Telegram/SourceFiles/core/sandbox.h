@@ -14,9 +14,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtNetwork/QLocalSocket>
 #include <QtCore/QAbstractNativeEventFilter>
 
+class QLockFile;
+
 namespace Core {
 
-class Launcher;
 class UpdateChecker;
 class Application;
 
@@ -30,7 +31,7 @@ private:
 	}
 
 public:
-	Sandbox(not_null<Launcher*> launcher, int &argc, char **argv);
+	Sandbox(int &argc, char **argv);
 
 	Sandbox(const Sandbox &other) = delete;
 	Sandbox &operator=(const Sandbox &other) = delete;
@@ -38,7 +39,6 @@ public:
 	int start();
 
 	void refreshGlobalProxy();
-	uint64 installationTag() const;
 
 	void postponeCall(FnMut<void()> &&callable);
 	bool notify(QObject *receiver, QEvent *e) override;
@@ -59,6 +59,7 @@ public:
 
 		return *static_cast<Sandbox*>(QCoreApplication::instance());
 	}
+	static void QuitWhenStarted();
 
 	~Sandbox();
 
@@ -85,12 +86,14 @@ private:
 	bool nativeEventFilter(
 		const QByteArray &eventType,
 		void *message,
-		long *result) override;
+		native_event_filter_result *result) override;
 	void processPostponedCalls(int level);
 	void singleInstanceChecked();
 	void launchApplication();
 	void setupScreenScale();
-	void execExternal(const QString &cmd);
+
+	// Return window id for activation.
+	uint64 execExternal(const QString &cmd);
 
 	// Single instance application
 	void socketConnected();
@@ -103,21 +106,23 @@ private:
 	void readClients();
 	void removeClients();
 
+	QEventLoopLocker _eventLoopLocker;
 	const Qt::HANDLE _mainThreadId = nullptr;
 	int _eventNestingLevel = 0;
 	int _loopNestingLevel = 0;
 	std::vector<int> _previousLoopNestingLevels;
 	std::vector<PostponedCall> _postponedCalls;
-	SingleQueuedInvokation _handleObservables;
 
-	not_null<Launcher*> _launcher;
 	std::unique_ptr<Application> _application;
 
 	QString _localServerName, _localSocketReadData;
 	QLocalServer _localServer;
 	QLocalSocket _localSocket;
 	LocalClients _localClients;
+	std::unique_ptr<QLockFile> _lockFile;
 	bool _secondInstance = false;
+	bool _started = false;
+	static bool QuitOnStartRequested;
 
 	std::unique_ptr<UpdateChecker> _updateChecker;
 
@@ -125,6 +130,8 @@ private:
 	MTP::ProxyData _sandboxProxy;
 
 	rpl::event_stream<> _widgetUpdateRequests;
+
+	std::unique_ptr<QThread> _deadlockDetector;
 
 };
 

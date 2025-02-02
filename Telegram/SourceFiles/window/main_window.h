@@ -12,8 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/object_ptr.h"
 #include "core/core_settings.h"
 
-#include <QtWidgets/QSystemTrayIcon>
-
 namespace Main {
 class Session;
 class Account;
@@ -26,6 +24,7 @@ class PlainShadow;
 
 namespace Core {
 struct WindowPosition;
+enum class QuitReason;
 } // namespace Core
 
 namespace Window {
@@ -34,11 +33,32 @@ class Controller;
 class SessionController;
 class TitleWidget;
 struct TermsLock;
+struct SeparateId;
 
-QImage LoadLogo();
-QImage LoadLogoNoMargin();
-QIcon CreateIcon(Main::Session *session = nullptr);
+[[nodiscard]] const QImage &Logo();
+[[nodiscard]] const QImage &LogoNoMargin();
+void OverrideApplicationIcon(QImage image);
+[[nodiscard]] QIcon CreateIcon(
+	Main::Session *session = nullptr,
+	bool returnNullIfDefault = false);
 void ConvertIconToBlack(QImage &image);
+
+struct CounterLayerArgs {
+	template <typename T>
+	using required = base::required<T>;
+
+	required<int> size = 16;
+	double devicePixelRatio = 1.;
+	required<int> count = 1;
+	required<style::color> bg;
+	required<style::color> fg;
+};
+
+extern const char kOptionNewWindowsSizeAsFirst[];
+extern const char kOptionDisableTouchbar[];
+
+[[nodiscard]] QImage GenerateCounterLayer(CounterLayerArgs &&args);
+[[nodiscard]] QImage WithSmallCounter(QImage image, CounterLayerArgs &&args);
 
 class MainWindow : public Ui::RpWindow {
 public:
@@ -48,6 +68,8 @@ public:
 	[[nodiscard]] Window::Controller &controller() const {
 		return *_controller;
 	}
+	[[nodiscard]] Window::SeparateId id() const;
+	[[nodiscard]] bool isPrimary() const;
 	[[nodiscard]] Main::Account &account() const;
 	[[nodiscard]] Window::SessionController *sessionController() const;
 
@@ -56,18 +78,17 @@ public:
 	void showFromTray();
 	void quitFromTray();
 	void activate();
-	virtual void showFromTrayMenu() {
-		showFromTray();
-	}
 
 	[[nodiscard]] QRect desktopRect() const;
+	[[nodiscard]] Core::WindowPosition withScreenInPosition(
+		Core::WindowPosition position) const;
 
 	void init();
 
 	void updateIsActive();
 
 	[[nodiscard]] bool isActive() const {
-		return _isActive;
+		return !isHidden() && _isActive;
 	}
 	[[nodiscard]] virtual bool isActiveForTrayMenu() {
 		updateIsActive();
@@ -79,8 +100,6 @@ public:
 	}
 	void positionUpdated();
 
-	void reActivateWindow();
-
 	void showRightColumn(object_ptr<TWidget> widget);
 	int maximalExtendBy() const;
 	bool canExtendNoMove(int extendBy) const;
@@ -88,8 +107,6 @@ public:
 	// Returns how much could the window get extended.
 	int tryToExtendWidthBy(int addToWidth);
 
-	virtual void updateTrayMenu() {
-	}
 	virtual void fixOrder() {
 	}
 	virtual void setInnerFocus() {
@@ -102,9 +119,11 @@ public:
 
 	void launchDrag(std::unique_ptr<QMimeData> data, Fn<void()> &&callback);
 
-	rpl::producer<> leaveEvents() const;
+	[[nodiscard]] rpl::producer<> leaveEvents() const;
+	[[nodiscard]] rpl::producer<> imeCompositionStarts() const;
 
-	virtual void updateWindowIcon();
+	virtual void updateWindowIcon() = 0;
+	void updateTitle();
 
 	void clearWidgets();
 
@@ -114,27 +133,32 @@ public:
 	void recountGeometryConstraints();
 	virtual void updateControlsGeometry();
 
+	void firstShow();
 	bool minimizeToTray();
 	void updateGlobalMenu() {
 		updateGlobalMenuHook();
 	}
 
+	[[nodiscard]] QRect countInitialGeometry(
+		Core::WindowPosition position,
+		Core::WindowPosition initial,
+		QSize minSize) const;
+
+	[[nodiscard]] virtual rpl::producer<QPoint> globalForceClicks() {
+		return rpl::never<QPoint>();
+	}
+
 protected:
-	void resizeEvent(QResizeEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 
 	void savePosition(Qt::WindowState state = Qt::WindowActive);
 	void handleStateChanged(Qt::WindowState state);
-	void handleActiveChanged();
+	void handleActiveChanged(bool active);
 	void handleVisibleChanged(bool visible);
 
+	virtual void checkActivation() {
+	}
 	virtual void initHook() {
-	}
-
-	virtual void activeChangedHook() {
-	}
-
-	virtual void handleActiveChangedHook() {
 	}
 
 	virtual void handleVisibleChangedHook(bool visible) {
@@ -156,14 +180,6 @@ protected:
 	virtual void updateGlobalMenuHook() {
 	}
 
-	virtual void initTrayMenuHook() {
-	}
-	virtual bool hasTrayIcon() const {
-		return false;
-	}
-	virtual void showTrayTooltip() {
-	}
-
 	virtual void workmodeUpdated(Core::Settings::WorkMode mode) {
 	}
 
@@ -174,14 +190,8 @@ protected:
 		return false;
 	}
 
-	// This one is overriden in Windows for historical reasons.
-	virtual int32 screenNameChecksum(const QString &name) const;
-
+	void imeCompositionStartReceived();
 	void setPositionInited();
-	void attachToTrayIcon(not_null<QSystemTrayIcon*> icon);
-	virtual void handleTrayIconActication(
-		QSystemTrayIcon::ActivationReason reason) = 0;
-	void updateUnreadCounter();
 
 	virtual QRect computeDesktopRect() const;
 
@@ -190,9 +200,10 @@ private:
 	void updateMinimumSize();
 	void updatePalette();
 
-	[[nodiscard]] Core::WindowPosition positionFromSettings() const;
+	[[nodiscard]] Core::WindowPosition initialPosition() const;
+	[[nodiscard]] Core::WindowPosition nextInitialChildPosition(
+		SeparateId childId);
 	[[nodiscard]] QRect countInitialGeometry(Core::WindowPosition position);
-	void initGeometry();
 
 	bool computeIsActive() const;
 
@@ -206,18 +217,30 @@ private:
 	object_ptr<Ui::RpWidget> _body;
 	object_ptr<TWidget> _rightColumn = { nullptr };
 
-	QIcon _icon;
-	bool _usingSupportIcon = false;
-
 	bool _isActive = false;
 
 	rpl::event_stream<> _leaveEvents;
+	rpl::event_stream<> _imeCompositionStartReceived;
 
 	bool _maximizedBeforeHide = false;
+
+	QPoint _lastMyChildCreatePosition;
+	int _lastChildIndex = 0;
 
 	mutable QRect _monitorRect;
 	mutable crl::time _monitorLastGot = 0;
 
 };
+
+[[nodiscard]] int32 DefaultScreenNameChecksum(const QString &name);
+
+[[nodiscard]] Core::WindowPosition PositionWithScreen(
+	Core::WindowPosition position,
+	const QScreen *chosen,
+	QSize minimal);
+[[nodiscard]] Core::WindowPosition PositionWithScreen(
+	Core::WindowPosition position,
+	not_null<const QWidget*> widget,
+	QSize minimal);
 
 } // namespace Window

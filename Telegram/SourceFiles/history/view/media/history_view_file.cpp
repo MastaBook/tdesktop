@@ -22,6 +22,7 @@ namespace HistoryView {
 bool File::toggleSelectionByHandlerClick(const ClickHandlerPtr &p) const {
 	return p == _openl || p == _savel || p == _cancell;
 }
+
 bool File::dragItemByHandler(const ClickHandlerPtr &p) const {
 	return p == _openl || p == _savel || p == _cancell;
 }
@@ -30,21 +31,17 @@ void File::clickHandlerActiveChanged(const ClickHandlerPtr &p, bool active) {
 	if (p == _savel || p == _cancell) {
 		if (active && !dataLoaded()) {
 			ensureAnimation();
-			_animation->a_thumbOver.start([this] { thumbAnimationCallback(); }, 0., 1., st::msgFileOverDuration);
+			_animation->a_thumbOver.start([=] { repaint(); }, 0., 1., st::msgFileOverDuration);
 		} else if (!active && _animation && !dataLoaded()) {
-			_animation->a_thumbOver.start([this] { thumbAnimationCallback(); }, 1., 0., st::msgFileOverDuration);
+			_animation->a_thumbOver.start([=] { repaint(); }, 1., 0., st::msgFileOverDuration);
 		}
 	}
-}
-
-void File::thumbAnimationCallback() {
-	history()->owner().requestViewRepaint(_parent);
 }
 
 void File::clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
 		bool pressed) {
-	history()->owner().requestViewRepaint(_parent);
+	repaint();
 }
 
 void File::setLinks(
@@ -69,12 +66,16 @@ void File::refreshParentId(not_null<HistoryItem*> realParent) {
 	}
 }
 
-void File::setStatusSize(int newSize, int fullSize, int duration, qint64 realDuration) const {
+void File::setStatusSize(
+		int64 newSize,
+		int64 fullSize,
+		TimeId duration,
+		TimeId realDuration) const {
 	_statusSize = newSize;
 	if (_statusSize == Ui::FileStatusSizeReady) {
 		_statusText = (duration >= 0) ? Ui::FormatDurationAndSizeText(duration, fullSize) : (duration < -1 ? Ui::FormatGifAndSizeText(fullSize) : Ui::FormatSizeText(fullSize));
 	} else if (_statusSize == Ui::FileStatusSizeLoaded) {
-		_statusText = (duration >= 0) ? Ui::FormatDurationText(duration) : (duration < -1 ? qsl("GIF") : Ui::FormatSizeText(fullSize));
+		_statusText = (duration >= 0) ? Ui::FormatDurationText(duration) : (duration < -1 ? u"GIF"_q : Ui::FormatSizeText(fullSize));
 	} else if (_statusSize == Ui::FileStatusSizeFailed) {
 		_statusText = tr::lng_attach_failed(tr::now);
 	} else if (_statusSize >= 0) {
@@ -92,7 +93,7 @@ void File::radialAnimationCallback(crl::time now) const {
 			now);
 	}();
 	if (!anim::Disabled() || updated) {
-		history()->owner().requestViewRepaint(_parent);
+		repaint();
 	}
 	if (!_animation->radial.animating()) {
 		checkAnimationFinished();
@@ -116,13 +117,16 @@ void File::checkAnimationFinished() const {
 }
 void File::setDocumentLinks(
 		not_null<DocumentData*> document,
-		not_null<HistoryItem*> realParent) {
+		not_null<HistoryItem*> realParent,
+		Fn<bool()> openHook) {
 	const auto context = realParent->fullId();
 	setLinks(
 		std::make_shared<DocumentOpenClickHandler>(
 			document,
 			crl::guard(this, [=](FullMsgId id) {
-				_parent->delegate()->elementOpenDocument(document, id);
+				if (!openHook || !openHook()) {
+					_parent->delegate()->elementOpenDocument(document, id);
+				}
 			}),
 			context),
 		std::make_shared<DocumentSaveClickHandler>(document, context),

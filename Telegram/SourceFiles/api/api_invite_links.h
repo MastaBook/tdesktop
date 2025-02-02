@@ -9,16 +9,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class ApiWrap;
 
+#include "data/data_subscriptions.h"
+
 namespace Api {
 
 struct InviteLink {
 	QString link;
+	QString label;
+	Data::PeerSubscription subscription;
 	not_null<UserData*> admin;
 	TimeId date = 0;
 	TimeId startDate = 0;
 	TimeId expireDate = 0;
 	int usageLimit = 0;
 	int usage = 0;
+	int requested = 0;
+	bool requestApproval = false;
 	bool permanent = false;
 	bool revoked = false;
 };
@@ -31,6 +37,7 @@ struct PeerInviteLinks {
 struct JoinedByLinkUser {
 	not_null<UserData*> user;
 	TimeId date = 0;
+	bool viaFilterLink = false;
 };
 
 struct JoinedByLinkSlice {
@@ -49,6 +56,16 @@ struct InviteLinkUpdate {
 	not_null<PeerData*> peer,
 	const MTPmessages_ChatInviteImporters &slice);
 
+struct CreateInviteLinkArgs {
+	not_null<PeerData*> peer;
+	Fn<void(InviteLink)> done = nullptr;
+	QString label;
+	TimeId expireDate = 0;
+	int usageLimit = 0;
+	bool requestApproval = false;
+	Data::PeerSubscription subscription;
+};
+
 class InviteLinks final {
 public:
 	explicit InviteLinks(not_null<ApiWrap*> api);
@@ -57,17 +74,21 @@ public:
 	using Links = PeerInviteLinks;
 	using Update = InviteLinkUpdate;
 
-	void create(
-		not_null<PeerData*> peer,
-		Fn<void(Link)> done = nullptr,
-		TimeId expireDate = 0,
-		int usageLimit = 0);
+	void create(const CreateInviteLinkArgs &args);
 	void edit(
 		not_null<PeerData*> peer,
 		not_null<UserData*> admin,
 		const QString &link,
+		const QString &label,
 		TimeId expireDate,
 		int usageLimit,
+		bool requestApproval,
+		Fn<void(Link)> done = nullptr);
+	void editTitle(
+		not_null<PeerData*> peer,
+		not_null<UserData*> admin,
+		const QString &link,
+		const QString &label,
 		Fn<void(Link)> done = nullptr);
 	void revoke(
 		not_null<PeerData*> peer,
@@ -96,6 +117,15 @@ public:
 
 	void requestMyLinks(not_null<PeerData*> peer);
 	[[nodiscard]] const Links &myLinks(not_null<PeerData*> peer) const;
+
+	void processRequest(
+		not_null<PeerData*> peer,
+		const QString &link,
+		not_null<UserData*> user,
+		bool approved,
+		Fn<void()> done,
+		Fn<void()> fail);
+	void applyExternalUpdate(not_null<PeerData*> peer, InviteLink updated);
 
 	[[nodiscard]] rpl::producer<JoinedByLinkSlice> joinedFirstSliceValue(
 		not_null<PeerData*> peer,
@@ -133,17 +163,21 @@ private:
 			return (a.peer == b.peer) && (a.link == b.link);
 		}
 	};
+	struct ProcessRequest {
+		Fn<void()> done;
+		Fn<void()> fail;
+	};
 
 	[[nodiscard]] Links parseSlice(
 		not_null<PeerData*> peer,
 		const MTPmessages_ExportedChatInvites &slice) const;
-	[[nodiscard]] Link parse(
+	[[nodiscard]] std::optional<Link> parse(
 		not_null<PeerData*> peer,
 		const MTPExportedChatInvite &invite) const;
 	[[nodiscard]] Link *lookupMyPermanent(not_null<PeerData*> peer);
 	[[nodiscard]] Link *lookupMyPermanent(Links &links);
 	[[nodiscard]] const Link *lookupMyPermanent(const Links &links) const;
-	Link prepend(
+	std::optional<Link> prepend(
 		not_null<PeerData*> peer,
 		not_null<UserData*> admin,
 		const MTPExportedChatInvite &invite);
@@ -163,14 +197,14 @@ private:
 		const QString &link,
 		Fn<void(Link)> done,
 		bool revoke,
+		const QString &label = QString(),
 		TimeId expireDate = 0,
-		int usageLimit = 0);
+		int usageLimit = 0,
+		bool requestApproval = false,
+		bool editOnlyTitle = false);
 	void performCreate(
-		not_null<PeerData*> peer,
-		Fn<void(Link)> done,
-		bool revokeLegacyPermanent,
-		TimeId expireDate = 0,
-		int usageLimit = 0);
+		const CreateInviteLinkArgs &args,
+		bool revokeLegacyPermanent);
 
 	void requestJoinedFirstSlice(LinkKey key);
 	[[nodiscard]] std::optional<JoinedByLinkSlice> lookupJoinedFirstSlice(
@@ -193,6 +227,10 @@ private:
 	base::flat_map<
 		not_null<PeerData*>,
 		std::vector<Fn<void()>>> _deleteRevokedCallbacks;
+
+	base::flat_map<
+		std::pair<not_null<PeerData*>, not_null<UserData*>>,
+		ProcessRequest> _processRequests;
 
 	rpl::event_stream<Update> _updates;
 

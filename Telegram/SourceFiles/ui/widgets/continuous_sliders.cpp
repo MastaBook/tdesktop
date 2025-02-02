@@ -7,8 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/widgets/continuous_sliders.h"
 
+#include "ui/painter.h"
 #include "base/timer.h"
 #include "base/platform/base_platform_info.h"
+#include "styles/style_widgets.h"
 
 namespace Ui {
 namespace {
@@ -136,7 +138,7 @@ void ContinuousSlider::updateDownValueFromPos(const QPoint &pos) {
 	}
 }
 
-void ContinuousSlider::enterEventHook(QEvent *e) {
+void ContinuousSlider::enterEventHook(QEnterEvent *e) {
 	setOver(true);
 }
 
@@ -165,7 +167,7 @@ float64 FilledSlider::getOverDuration() const {
 }
 
 void FilledSlider::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	PainterHighQualityEnabler hq(p);
 
 	p.setPen(Qt::NoPen);
@@ -174,7 +176,7 @@ void FilledSlider::paintEvent(QPaintEvent *e) {
 	const auto disabled = isDisabled();
 	const auto over = getCurrentOverFactor();
 	const auto lineWidth = _st.lineWidth + ((_st.fullWidth - _st.lineWidth) * over);
-	const auto lineWidthRounded = qFloor(lineWidth);
+	const auto lineWidthRounded = std::floor(lineWidth);
 	const auto lineWidthPartial = lineWidth - lineWidthRounded;
 	const auto seekRect = getSeekRect();
 	const auto value = getCurrentValue();
@@ -228,7 +230,7 @@ void MediaSlider::paintEvent(QPaintEvent *e) {
 	if (_paintDisabled) {
 		return;
 	}
-	Painter p(this);
+	auto p = QPainter(this);
 	PainterHighQualityEnabler hq(p);
 
 	p.setPen(Qt::NoPen);
@@ -329,7 +331,7 @@ void MediaSlider::paintEvent(QPaintEvent *e) {
 			const auto dividerValue = horizontal
 				? divider.atValue
 				: (1. - divider.atValue);
-			const auto dividerMid = std::round(from
+			const auto dividerMid = base::SafeRound(from
 				+ dividerValue * length);
 			const auto &size = divider.size;
 			const auto rect = horizontal

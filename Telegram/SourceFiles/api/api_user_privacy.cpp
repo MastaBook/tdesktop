@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "main/main_session.h"
+#include "settings/settings_premium.h" // Settings::ShowPremium.
 
 namespace Api {
 namespace {
@@ -25,7 +26,9 @@ using TLInputRules = MTPVector<MTPInputPrivacyRule>;
 using TLRules = MTPVector<MTPPrivacyRule>;
 
 TLInputRules RulesToTL(const UserPrivacy::Rule &rule) {
-	const auto collectInputUsers = [](const auto &peers) {
+	using Exceptions = UserPrivacy::Exceptions;
+	const auto collectInputUsers = [](const Exceptions &exceptions) {
+		const auto &peers = exceptions.peers;
 		auto result = QVector<MTPInputUser>();
 		result.reserve(peers.size());
 		for (const auto &peer : peers) {
@@ -35,7 +38,8 @@ TLInputRules RulesToTL(const UserPrivacy::Rule &rule) {
 		}
 		return result;
 	};
-	const auto collectInputChats = [](const auto &peers) {
+	const auto collectInputChats = [](const Exceptions &exceptions) {
+		const auto &peers = exceptions.peers;
 		auto result = QVector<MTPlong>();
 		result.reserve(peers.size());
 		for (const auto &peer : peers) {
@@ -46,6 +50,7 @@ TLInputRules RulesToTL(const UserPrivacy::Rule &rule) {
 		return result;
 	};
 
+	using Option = UserPrivacy::Option;
 	auto result = QVector<MTPInputPrivacyRule>();
 	result.reserve(kMaxRules);
 	if (!rule.ignoreAlways) {
@@ -61,6 +66,12 @@ TLInputRules RulesToTL(const UserPrivacy::Rule &rule) {
 				MTP_inputPrivacyValueAllowChatParticipants(
 					MTP_vector<MTPlong>(chats)));
 		}
+		if (rule.always.premiums && (rule.option != Option::Everyone)) {
+			result.push_back(MTP_inputPrivacyValueAllowPremium());
+		}
+		if (rule.always.miniapps && (rule.option != Option::Everyone)) {
+			result.push_back(MTP_inputPrivacyValueAllowBots());
+		}
 	}
 	if (!rule.ignoreNever) {
 		const auto users = collectInputUsers(rule.never);
@@ -75,12 +86,16 @@ TLInputRules RulesToTL(const UserPrivacy::Rule &rule) {
 				MTP_inputPrivacyValueDisallowChatParticipants(
 					MTP_vector<MTPlong>(chats)));
 		}
+		if (rule.never.miniapps && (rule.option != Option::Nobody)) {
+			result.push_back(MTP_inputPrivacyValueDisallowBots());
+		}
 	}
 	result.push_back([&] {
-		using Option = UserPrivacy::Option;
 		switch (rule.option) {
 		case Option::Everyone: return MTP_inputPrivacyValueAllowAll();
 		case Option::Contacts: return MTP_inputPrivacyValueAllowContacts();
+		case Option::CloseFriends:
+			return MTP_inputPrivacyValueAllowCloseFriends();
 		case Option::Nobody: return MTP_inputPrivacyValueDisallowAll();
 		}
 		Unexpected("Option value in Api::UserPrivacy::RulesToTL.");
@@ -98,17 +113,27 @@ UserPrivacy::Rule TLToRules(const TLRules &rules, Data::Session &owner) {
 	auto result = UserPrivacy::Rule();
 	auto optionSet = false;
 	const auto setOption = [&](Option option) {
-		if (optionSet) return;
+		if (optionSet) {
+			return;
+		}
 		optionSet = true;
 		result.option = option;
 	};
-	auto &always = result.always;
-	auto &never = result.never;
+	auto &always = result.always.peers;
+	auto &never = result.never.peers;
 	const auto feed = [&](const MTPPrivacyRule &rule) {
 		rule.match([&](const MTPDprivacyValueAllowAll &) {
 			setOption(Option::Everyone);
 		}, [&](const MTPDprivacyValueAllowContacts &) {
 			setOption(Option::Contacts);
+		}, [&](const MTPDprivacyValueAllowCloseFriends &) {
+			setOption(Option::CloseFriends);
+		}, [&](const MTPDprivacyValueAllowPremium &) {
+			result.always.premiums = true;
+		}, [&](const MTPDprivacyValueAllowBots &) {
+			result.always.miniapps = true;
+		}, [&](const MTPDprivacyValueDisallowBots &) {
+			result.never.miniapps = true;
 		}, [&](const MTPDprivacyValueAllowUsers &data) {
 			const auto &users = data.vusers().v;
 			always.reserve(always.size() + users.size());
@@ -176,16 +201,15 @@ MTPInputPrivacyKey KeyToTL(UserPrivacy::Key key) {
 	case Key::Calls: return MTP_inputPrivacyKeyPhoneCall();
 	case Key::Invites: return MTP_inputPrivacyKeyChatInvite();
 	case Key::PhoneNumber: return MTP_inputPrivacyKeyPhoneNumber();
-	case Key::AddedByPhone:
-		return MTP_inputPrivacyKeyAddedByPhone();
-	case Key::LastSeen:
-		return MTP_inputPrivacyKeyStatusTimestamp();
-	case Key::CallsPeer2Peer:
-		return MTP_inputPrivacyKeyPhoneP2P();
-	case Key::Forwards:
-		return MTP_inputPrivacyKeyForwards();
-	case Key::ProfilePhoto:
-		return MTP_inputPrivacyKeyProfilePhoto();
+	case Key::AddedByPhone: return MTP_inputPrivacyKeyAddedByPhone();
+	case Key::LastSeen: return MTP_inputPrivacyKeyStatusTimestamp();
+	case Key::CallsPeer2Peer: return MTP_inputPrivacyKeyPhoneP2P();
+	case Key::Forwards: return MTP_inputPrivacyKeyForwards();
+	case Key::ProfilePhoto: return MTP_inputPrivacyKeyProfilePhoto();
+	case Key::Voices: return MTP_inputPrivacyKeyVoiceMessages();
+	case Key::About: return MTP_inputPrivacyKeyAbout();
+	case Key::Birthday: return MTP_inputPrivacyKeyBirthday();
+	case Key::GiftsAutoSave: return MTP_inputPrivacyKeyStarGiftsAutoSave();
 	}
 	Unexpected("Key in Api::UserPrivacy::KetToTL.");
 }
@@ -209,6 +233,14 @@ std::optional<UserPrivacy::Key> TLToKey(mtpTypeId type) {
 	case mtpc_inputPrivacyKeyForwards: return Key::Forwards;
 	case mtpc_privacyKeyProfilePhoto:
 	case mtpc_inputPrivacyKeyProfilePhoto: return Key::ProfilePhoto;
+	case mtpc_privacyKeyVoiceMessages:
+	case mtpc_inputPrivacyKeyVoiceMessages: return Key::Voices;
+	case mtpc_privacyKeyAbout:
+	case mtpc_inputPrivacyKeyAbout: return Key::About;
+	case mtpc_privacyKeyBirthday:
+	case mtpc_inputPrivacyKeyBirthday: return Key::Birthday;
+	case mtpc_privacyKeyStarGiftsAutoSave:
+	case mtpc_inputPrivacyKeyStarGiftsAutoSave: return Key::GiftsAutoSave;
 	}
 	return std::nullopt;
 }
@@ -242,6 +274,10 @@ void UserPrivacy::save(
 			apply(keyTypeId, data.vrules(), true);
 		});
 	}).fail([=](const MTP::Error &error) {
+		const auto message = error.type();
+		if (message == u"PREMIUM_ACCOUNT_REQUIRED"_q) {
+			Settings::ShowPremium(_session, QString());
+		}
 		_privacySaveRequests.remove(keyTypeId);
 	}).send();
 
@@ -277,15 +313,15 @@ void UserPrivacy::reload(Key key) {
 			_session->data().processChats(data.vchats());
 			pushPrivacy(key, data.vrules());
 		});
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		_privacyRequestIds.erase(key);
 	}).send();
 	_privacyRequestIds.emplace(key, requestId);
 }
 
 void UserPrivacy::pushPrivacy(Key key, const TLRules &rules) {
-	const auto &saved = (_privacyValues[key] =
-		TLToRules(rules, _session->data()));
+	const auto &saved
+		= (_privacyValues[key] = TLToRules(rules, _session->data()));
 	const auto i = _privacyChanges.find(key);
 	if (i != end(_privacyChanges)) {
 		i->second.fire_copy(saved);

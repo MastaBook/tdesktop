@@ -33,12 +33,12 @@ Key ExtractKey(const QString &query) {
 				qthelp::UrlParamNameTransform::ToLower)
 			: QMap<QString, QString>();
 	};
-	if (check.startsWith(qstr("tg://privatepost"), Qt::CaseInsensitive)) {
+	if (check.startsWith(u"tg://privatepost"_q, Qt::CaseInsensitive)) {
 		const auto params = parse();
 		const auto channel = params.value("channel");
 		const auto post = params.value("post").toInt();
 		return (channel.toULongLong() && post) ? Key{ channel, post } : Key();
-	} else if (check.startsWith(qstr("tg://resolve"), Qt::CaseInsensitive)) {
+	} else if (check.startsWith(u"tg://resolve"_q, Qt::CaseInsensitive)) {
 		const auto params = parse();
 		const auto domain = params.value("domain");
 		const auto post = params.value("post").toInt();
@@ -87,7 +87,7 @@ std::optional<HistoryItem*> SingleMessageSearch::performLookupByChannel(
 	Expects(!_requestKey.empty());
 
 	const auto postId = _requestKey.postId;
-	if (const auto item = _session->data().message(channel, postId)) {
+	if (const auto item = _session->data().message(channel->id, postId)) {
 		_cache.emplace(_requestKey, item->fullId());
 		return item;
 	} else if (!ready) {
@@ -112,12 +112,12 @@ std::optional<HistoryItem*> SingleMessageSearch::performLookupByChannel(
 			&& received.messageIds.front() == postId) {
 			_cache.emplace(
 				_requestKey,
-				FullMsgId(peerToChannel(channel->id), postId));
+				FullMsgId(channel->id, postId));
 			ready();
 		} else {
 			fail();
 		}
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		fail();
 	}).send();
 
@@ -154,7 +154,7 @@ std::optional<HistoryItem*> SingleMessageSearch::performLookupById(
 				fail();
 			}
 		});
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		fail();
 	}).send();
 
@@ -181,7 +181,9 @@ std::optional<HistoryItem*> SingleMessageSearch::performLookupByUsername(
 		ready();
 	};
 	_requestId = _session->api().request(MTPcontacts_ResolveUsername(
-		MTP_string(username)
+		MTP_flags(0),
+		MTP_string(username),
+		MTP_string()
 	)).done([=](const MTPcontacts_ResolvedPeer &result) {
 		result.match([&](const MTPDcontacts_resolvedPeer &data) {
 			_session->data().processUsers(data.vusers());
@@ -198,7 +200,7 @@ std::optional<HistoryItem*> SingleMessageSearch::performLookupByUsername(
 				fail();
 			}
 		});
-	}).fail([=](const MTP::Error &error) {
+	}).fail([=] {
 		fail();
 	}).send();
 
@@ -220,7 +222,7 @@ QString ConvertPeerSearchQuery(const QString &query) {
 	const auto trimmed = query.trimmed();
 	const auto local = Core::TryConvertUrlToLocal(trimmed);
 	const auto check = local.isEmpty() ? trimmed : local;
-	if (!check.startsWith(qstr("tg://resolve"), Qt::CaseInsensitive)) {
+	if (!check.startsWith(u"tg://resolve"_q, Qt::CaseInsensitive)) {
 		return query;
 	}
 	const auto delimeter = check.indexOf('?');

@@ -7,16 +7,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_drafts.h"
+
 class History;
+
+namespace Data {
+class Thread;
+} // namespace Data
 
 namespace Api {
 
+inline constexpr auto kScheduledUntilOnlineTimestamp = TimeId(0x7FFFFFFE);
+
 struct SendOptions {
+	uint64 price = 0;
+	PeerData *sendAs = nullptr;
 	TimeId scheduled = 0;
+	BusinessShortcutId shortcutId = 0;
+	EffectId effectId = 0;
 	bool silent = false;
 	bool handleSupportSwitch = false;
-	bool removeWebPageId = false;
+	bool invertCaption = false;
+	bool hideViaBot = false;
+	crl::time ttlSeconds = 0;
+
+	friend inline bool operator==(
+		const SendOptions &,
+		const SendOptions &) = default;
 };
+[[nodiscard]] SendOptions DefaultSendWhenOnlineOptions();
 
 enum class SendType {
 	Normal,
@@ -25,24 +44,37 @@ enum class SendType {
 };
 
 struct SendAction {
-	explicit SendAction(not_null<History*> history) : history(history) {
-	}
+	explicit SendAction(
+		not_null<Data::Thread*> thread,
+		SendOptions options = SendOptions());
 
 	not_null<History*> history;
 	SendOptions options;
-	MsgId replyTo = 0;
+	FullReplyTo replyTo;
 	bool clearDraft = true;
 	bool generateLocal = true;
 	MsgId replaceMediaOf = 0;
+
+	[[nodiscard]] MTPInputReplyTo mtpReplyTo() const;
+
+	friend inline bool operator==(
+		const SendAction &,
+		const SendAction &) = default;
 };
 
 struct MessageToSend {
-	explicit MessageToSend(not_null<History*> history) : action(history) {
+	explicit MessageToSend(SendAction action) : action(action) {
 	}
 
 	SendAction action;
 	TextWithTags textWithTags;
-	WebPageId webPageId = 0;
+	Data::WebPageDraft webPage;
+};
+
+struct RemoteFileInfo {
+	MTPInputFile file;
+	std::optional<MTPInputFile> thumb;
+	std::vector<MTPInputDocument> attachedStickers;
 };
 
 } // namespace Api

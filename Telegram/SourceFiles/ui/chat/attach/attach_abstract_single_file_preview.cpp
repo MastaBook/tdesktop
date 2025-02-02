@@ -7,25 +7,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/chat/attach/attach_abstract_single_file_preview.h"
 
-#include "ui/text/text_options.h"
-#include "ui/widgets/buttons.h"
-#include "ui/image/image_prepare.h"
 #include "base/timer_rpl.h"
-#include "styles/style_chat.h"
+#include "ui/image/image_prepare.h"
+#include "ui/painter.h"
+#include "ui/text/text_options.h"
+#include "ui/ui_utility.h"
+#include "ui/widgets/buttons.h"
 #include "styles/style_boxes.h"
+#include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 
 namespace Ui {
 
 AbstractSingleFilePreview::AbstractSingleFilePreview(
 	QWidget *parent,
+	const style::ComposeControls &st,
 	AttachControls::Type type)
 : AbstractSinglePreview(parent)
+, _st(st)
 , _type(type)
-, _editMedia(this, st::sendBoxAlbumGroupButtonFile)
-, _deleteMedia(this, st::sendBoxAlbumGroupButtonFile) {
+, _editMedia(this, _st.files.buttonFile)
+, _deleteMedia(this, _st.files.buttonFile) {
 
-	_editMedia->setIconOverride(&st::sendBoxAlbumGroupEditButtonIconFile);
-	_deleteMedia->setIconOverride(&st::sendBoxAlbumGroupDeleteButtonIconFile);
+	_editMedia->setIconOverride(&_st.files.buttonFileEdit);
+	_deleteMedia->setIconOverride(&_st.files.buttonFileDelete);
 
 	if (type == AttachControls::Type::Full) {
 		_deleteMedia->show();
@@ -69,19 +74,11 @@ void AbstractSingleFilePreview::prepareThumbFor(
 	if (originalWidth > originalHeight) {
 		thumbWidth = (originalWidth * st.thumbSize) / originalHeight;
 	}
-	auto options = Images::Option::Smooth
-		| Images::Option::RoundedSmall
-		| Images::Option::RoundedTopLeft
-		| Images::Option::RoundedTopRight
-		| Images::Option::RoundedBottomLeft
-		| Images::Option::RoundedBottomRight;
-	data.fileThumb = PixmapFromImage(Images::prepare(
+	const auto options = Images::Option::RoundSmall;
+	data.fileThumb = PixmapFromImage(Images::Prepare(
 		preview,
 		thumbWidth * style::DevicePixelRatio(),
-		0,
-		options,
-		st.thumbSize,
-		st.thumbSize));
+		{ .options = options, .outer = { st.thumbSize, st.thumbSize } }));
 }
 
 void AbstractSingleFilePreview::paintEvent(QPaintEvent *e) {
@@ -93,7 +90,7 @@ void AbstractSingleFilePreview::paintEvent(QPaintEvent *e) {
 	const auto &st = !isThumbedLayout(_data)
 		? st::attachPreviewLayout
 		: st::attachPreviewThumbLayout;
-	const auto nameleft = st.thumbSize + st.padding.right();
+	const auto nameleft = st.thumbSize + st.thumbSkip;
 	const auto nametop = st.nameTop;
 	const auto statustop = st.statusTop;
 	const auto x = (width() - w) / 2, y = 0;
@@ -106,18 +103,17 @@ void AbstractSingleFilePreview::paintEvent(QPaintEvent *e) {
 		if (_data.fileIsAudio && !_data.fileThumb.isNull()) {
 			p.drawPixmap(inner.topLeft(), _data.fileThumb);
 		} else {
-			p.setBrush(st::msgFileInBg);
+			p.setBrush(_st.files.iconBg);
 			PainterHighQualityEnabler hq(p);
 			p.drawEllipse(inner);
 		}
-
 		auto &icon = _data.fileIsAudio
 			? (_data.fileThumb.isNull()
-				? st::historyFileInPlay
+				? _st.files.iconPlay
 				: st::historyFileThumbPlay)
 			: _data.fileIsImage
-			? st::historyFileInImage
-			: st::historyFileInDocument;
+			? _st.files.iconImage
+			: _st.files.iconDocument;
 		icon.paintInCenter(p, inner);
 	} else {
 		QRect rthumb(
@@ -125,7 +121,7 @@ void AbstractSingleFilePreview::paintEvent(QPaintEvent *e) {
 		p.drawPixmap(rthumb.topLeft(), _data.fileThumb);
 	}
 	p.setFont(st::semiboldFont);
-	p.setPen(st::historyFileNameInFg);
+	p.setPen(_st.files.nameFg);
 	p.drawTextLeft(
 		x + nameleft,
 		y + nametop, width(),
@@ -133,7 +129,7 @@ void AbstractSingleFilePreview::paintEvent(QPaintEvent *e) {
 		_data.nameWidth);
 
 	p.setFont(st::normalFont);
-	p.setPen(st::mediaInFg);
+	p.setPen(_st.files.statusFg);
 	p.drawTextLeft(
 		x + nameleft,
 		y + statustop,
@@ -171,9 +167,9 @@ void AbstractSingleFilePreview::updateTextWidthFor(Data &data) {
 		: 0;
 	const auto availableFileWidth = st::sendMediaPreviewSize
 		- st.thumbSize
-		- st.padding.right()
+		- st.thumbSkip
 		// Right buttons.
-		- st::sendBoxAlbumGroupButtonFile.width * buttonsCount
+		- _st.files.buttonFile.width * buttonsCount
 		- st::sendBoxAlbumGroupEditInternalSkip * buttonsCount
 		- st::sendBoxAlbumGroupSkipRight;
 	data.nameWidth = st::semiboldFont->width(data.name);

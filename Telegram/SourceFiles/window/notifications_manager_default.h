@@ -9,16 +9,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "window/notifications_manager.h"
 #include "ui/effects/animations.h"
+#include "ui/text/text.h"
 #include "ui/rp_widget.h"
+#include "ui/userpic_view.h"
 #include "base/timer.h"
 #include "base/binary_guard.h"
 #include "base/object_ptr.h"
 
 #include <QtCore/QTimer>
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
 
 namespace Ui {
 class IconButton;
@@ -68,17 +66,16 @@ private:
 	[[nodiscard]] QPixmap hiddenUserpicPlaceholder() const;
 
 	void doUpdateAll() override;
-	void doShowNotification(
-		not_null<HistoryItem*> item,
-		int forwardedCount) override;
+	void doShowNotification(NotificationFields &&fields) override;
 	void doClearAll() override;
 	void doClearAllFast() override;
+	void doClearFromTopic(not_null<Data::ForumTopic*> topic) override;
 	void doClearFromHistory(not_null<History*> history) override;
 	void doClearFromSession(not_null<Main::Session*> session) override;
 	void doClearFromItem(not_null<HistoryItem*> item) override;
-	bool doSkipAudio() const override;
 	bool doSkipToast() const override;
-	bool doSkipFlashBounce() const override;
+	void doMaybePlaySound(Fn<void()> playSound) override;
+	void doMaybeFlashBounce(Fn<void()> flashBounce) override;
 
 	void showNextFromQueue();
 	void unlinkFromShown(Notification *remove);
@@ -110,10 +107,12 @@ private:
 	base::Timer _inputCheckTimer;
 
 	struct QueuedNotification {
-		QueuedNotification(not_null<HistoryItem*> item, int forwardedCount);
+		QueuedNotification(NotificationFields &&fields);
 
 		not_null<History*> history;
+		MsgId topicRootId = 0;
 		not_null<PeerData*> peer;
+		Data::ReactionId reaction;
 		QString author;
 		HistoryItem *item = nullptr;
 		int forwardedCount = 0;
@@ -172,7 +171,6 @@ protected:
 
 private:
 	void opacityAnimationCallback();
-	void destroyDelayed();
 	void moveByShift();
 	void hideAnimated(float64 duration, const anim::transition &func);
 	bool shiftAnimationCallback(crl::time now);
@@ -180,7 +178,6 @@ private:
 	const not_null<Manager*> _manager;
 
 	bool _hiding = false;
-	bool _deleted = false;
 	base::binary_guard _hidingDelayed;
 	Ui::Animations::Simple _a_opacity;
 
@@ -205,9 +202,11 @@ public:
 	Notification(
 		not_null<Manager*> manager,
 		not_null<History*> history,
+		MsgId topicRootId,
 		not_null<PeerData*> peer,
 		const QString &author,
 		HistoryItem *item,
+		const Data::ReactionId &reaction,
 		int forwardedCount,
 		bool fromScheduled,
 		QPoint startPosition,
@@ -232,14 +231,14 @@ public:
 
 	// Called only by Manager.
 	bool unlinkItem(HistoryItem *del);
-	bool unlinkHistory(History *history = nullptr);
+	bool unlinkHistory(History *history = nullptr, MsgId topicRootId = 0);
 	bool unlinkSession(not_null<Main::Session*> session);
 	bool checkLastInput(
 		bool hasReplyingNotifications,
 		std::optional<crl::time> lastInputTime);
 
 protected:
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
@@ -260,23 +259,35 @@ private:
 	void changeHeight(int newHeight);
 	void updateGeometry(int x, int y, int width, int height) override;
 	void actionsOpacityCallback();
+	void repaintText();
+	void paintTitle(Painter &p);
+	void paintText(Painter &p);
+	void customEmojiCallback();
 
 	[[nodiscard]] Notifications::Manager::NotificationId myId() const;
 
 	const not_null<PeerData*> _peer;
 
-	QPixmap _cache;
+	QImage _cache;
+	Ui::Text::String _titleCache;
+	Ui::Text::String _textCache;
+	QRect _titleRect;
+	QRect _textRect;
 
 	bool _hideReplyButton = false;
 	bool _actionsVisible = false;
+	bool _textsRepaintScheduled = false;
 	Ui::Animations::Simple a_actionsOpacity;
 	QPixmap _buttonsCache;
 
 	crl::time _started;
 
 	History *_history = nullptr;
-	std::shared_ptr<Data::CloudImageView> _userpicView;
+	Data::ForumTopic *_topic = nullptr;
+	MsgId _topicRootId = 0;
+	Ui::PeerUserpicView _userpicView;
 	QString _author;
+	Data::ReactionId _reaction;
 	HistoryItem *_item = nullptr;
 	int _forwardedCount = 0;
 	bool _fromScheduled = false;
@@ -308,7 +319,7 @@ public:
 	void stopHiding();
 
 protected:
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;

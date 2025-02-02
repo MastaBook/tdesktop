@@ -9,9 +9,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "info/polls/info_polls_results_inner_widget.h"
 #include "boxes/peer_list_box.h"
+#include "lang/lang_keys.h"
+#include "data/data_poll.h"
+#include "ui/ui_utility.h"
 
-namespace Info {
-namespace Polls {
+namespace Info::Polls {
 
 Memento::Memento(not_null<PollData*> poll, FullMsgId contextId)
 : ContentMemento(poll, contextId) {
@@ -59,8 +61,6 @@ Widget::Widget(QWidget *parent, not_null<Controller*> controller)
 	) | rpl::start_with_next([=](const Ui::ScrollToRequest &request) {
 		scrollTo(request);
 	}, _inner->lifetime());
-
-	controller->setCanSaveChanges(rpl::single(false));
 }
 
 not_null<PollData*> Widget::poll() const {
@@ -90,6 +90,12 @@ void Widget::setInternalState(
 	restoreState(memento);
 }
 
+rpl::producer<QString> Widget::title() {
+	return poll()->quiz()
+		? tr::lng_polls_quiz_results_title()
+		: tr::lng_polls_poll_results_title();
+}
+
 std::shared_ptr<ContentMemento> Widget::doCreateMemento() {
 	auto result = std::make_shared<Memento>(poll(), contextId());
 	saveState(result.get());
@@ -106,5 +112,4 @@ void Widget::restoreState(not_null<Memento*> memento) {
 	scrollTopRestore(memento->scrollTop());
 }
 
-} // namespace Polls
-} // namespace Info
+} // namespace Info::Polls

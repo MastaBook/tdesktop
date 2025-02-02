@@ -11,17 +11,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Ui {
 
+class AbstractCheckView;
+
 struct ForwardOptions {
+	int sendersCount = 0;
+	int captionsCount = 0;
 	bool dropNames = false;
-	bool hasCaptions = false;
 	bool dropCaptions = false;
 };
 
-void ForwardOptionsBox(
-	not_null<GenericBox*> box,
-	int count,
+void FillForwardOptions(
+	Fn<not_null<AbstractCheckView*>(
+		rpl::producer<QString> &&,
+		bool)> createView,
 	ForwardOptions options,
 	Fn<void(ForwardOptions)> optionsChanged,
-	Fn<void()> changeRecipient);
+	rpl::lifetime &lifetime);
 
 } // namespace Ui

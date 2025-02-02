@@ -43,20 +43,20 @@ struct ResultSelected;
 } // namespace InlineBots
 
 namespace SendMenu {
-enum class Type;
+struct Details;
 } // namespace SendMenu
 
 namespace InlineBots {
 namespace Layout {
-
-constexpr int kInlineItemsMaxPerRow = 5;
 
 class ItemBase;
 using Results = std::vector<std::unique_ptr<Result>>;
 
 struct CacheEntry {
 	QString nextOffset;
-	QString switchPmText, switchPmStartToken;
+	QString switchPmText;
+	QString switchPmStartToken;
+	QByteArray switchPmUrl;
 	Results results;
 };
 
@@ -89,10 +89,7 @@ public:
 	void setResultSelectedCallback(Fn<void(ResultSelected)> callback) {
 		_resultSelectedCallback = std::move(callback);
 	}
-	void setCurrentDialogsEntryState(Dialogs::EntryState state) {
-		_currentDialogsEntryState = state;
-	}
-	void setSendMenuType(Fn<SendMenu::Type()> &&callback);
+	void setSendMenuDetails(Fn<SendMenu::Details()> &&callback);
 
 	// Ui::AbstractTooltipShower interface.
 	QString tooltipText() const override;
@@ -111,6 +108,7 @@ protected:
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
 	void mouseMoveEvent(QMouseEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void leaveToChildEvent(QEvent *e, QWidget *child) override;
@@ -135,9 +133,11 @@ private:
 
 	void showPreview();
 	void updateInlineItems();
+	void repaintItems(crl::time now = 0);
 	void clearInlineRows(bool resultsDeleted);
 	ItemBase *layoutPrepareInlineResult(Result *result);
 
+	void updateRestrictedLabelGeometry();
 	void deleteUnusedInlineLayouts();
 
 	int validateExistingInlineRows(const Results &results);
@@ -154,15 +154,17 @@ private:
 
 	UserData *_inlineBot = nullptr;
 	PeerData *_inlineQueryPeer = nullptr;
-	crl::time _lastScrolled = 0;
+	crl::time _lastScrolledAt = 0;
+	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
 	bool _inlineWithThumb = false;
 
 	object_ptr<Ui::RoundButton> _switchPmButton = { nullptr };
 	QString _switchPmStartToken;
-	Dialogs::EntryState _currentDialogsEntryState;
+	QByteArray _switchPmUrl;
 
 	object_ptr<Ui::FlatLabel> _restrictedLabel = { nullptr };
+	QString _restrictedLabelKey;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
 
@@ -180,7 +182,7 @@ private:
 	bool _previewShown = false;
 
 	Fn<void(ResultSelected)> _resultSelectedCallback;
-	Fn<SendMenu::Type()> _sendMenuType;
+	Fn<SendMenu::Details()> _sendMenuDetails;
 
 };
 

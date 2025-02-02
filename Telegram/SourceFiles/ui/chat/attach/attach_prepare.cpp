@@ -35,6 +35,22 @@ bool PreparedFile::canBeInAlbumType(AlbumType album) const {
 	return CanBeInAlbumType(type, album);
 }
 
+bool PreparedFile::isSticker() const {
+	Expects(information != nullptr);
+
+	return (type == PreparedFile::Type::Photo)
+		&& Core::IsMimeSticker(information->filemime);
+}
+
+bool PreparedFile::isGifv() const {
+	Expects(information != nullptr);
+
+	using Video = Ui::PreparedFileInformation::Video;
+	return (type == PreparedFile::Type::Video)
+		&& v::is<Video>(information->media)
+		&& v::get<Video>(information->media).isGifv;
+}
+
 AlbumType PreparedFile::albumType(bool sendImagesAsPhotos) const {
 	switch (type) {
 	case Type::Photo:
@@ -64,6 +80,10 @@ bool CanBeInAlbumType(PreparedFile::Type type, AlbumType album) {
 		return (type == Type::Photo) || (type == Type::File);
 	}
 	Unexpected("AlbumType in CanBeInAlbumType.");
+}
+
+bool InsertTextOnImageCancel(const QString &text) {
+	return !text.isEmpty() && !text.startsWith(u"data:image"_q);
 }
 
 PreparedList PreparedList::Reordered(
@@ -138,7 +158,7 @@ bool PreparedList::canBeSentInSlowmodeWith(const PreparedList &other) const {
 	return !hasNonGrouping && (!hasFiles || !hasVideos);
 }
 
-bool PreparedList::canAddCaption(bool sendingAlbum) const {
+bool PreparedList::canAddCaption(bool sendingAlbum, bool compress) const {
 	if (!filesToProcess.empty()
 		|| files.empty()
 		|| files.size() > kMaxAlbumCount) {
@@ -146,11 +166,9 @@ bool PreparedList::canAddCaption(bool sendingAlbum) const {
 	}
 	if (files.size() == 1) {
 		Assert(files.front().information != nullptr);
-		const auto isSticker = Core::IsMimeSticker(
-			files.front().information->filemime)
-			|| files.front().path.endsWith(
-				qstr(".tgs"),
-				Qt::CaseInsensitive);
+		const auto isSticker = (!compress
+				&& Core::IsMimeSticker(files.front().information->filemime))
+			|| files.front().path.endsWith(u".tgs"_q, Qt::CaseInsensitive);
 		return !isSticker;
 	} else if (!sendingAlbum) {
 		return false;
@@ -168,6 +186,21 @@ bool PreparedList::canAddCaption(bool sendingAlbum) const {
 		PreparedFile::Type::None,
 		&PreparedFile::type);
 	return !hasFiles && !hasMusic && !hasNotGrouped;
+}
+
+bool PreparedList::canMoveCaption(bool sendingAlbum, bool compress) const {
+	if (!canAddCaption(sendingAlbum, compress)) {
+		return false;
+	} else if (files.size() != 1) {
+		return true;
+	}
+	const auto &file = files.front();
+	return (file.type == PreparedFile::Type::Video)
+		|| (file.type == PreparedFile::Type::Photo && compress);
+}
+
+bool PreparedList::canChangePrice(bool sendingAlbum, bool compress) const {
+	return canMoveCaption(sendingAlbum, compress);
 }
 
 bool PreparedList::hasGroupOption(bool slowmode) const {
@@ -198,6 +231,32 @@ bool PreparedList::hasSendImagesAsPhotosOption(bool slowmode) const {
 		: ranges::contains(files, Type::Photo, &PreparedFile::type);
 }
 
+bool PreparedList::canHaveEditorHintLabel() const {
+	for (const auto &file : files) {
+		if ((file.type == PreparedFile::Type::Photo)
+			&& !Core::IsMimeSticker(file.information->filemime)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PreparedList::hasSticker() const {
+	return ranges::any_of(files, &PreparedFile::isSticker);
+}
+
+bool PreparedList::hasSpoilerMenu(bool compress) const {
+	const auto allAreVideo = !ranges::any_of(files, [](const auto &f) {
+		using Type = Ui::PreparedFile::Type;
+		return (f.type != Type::Video);
+	});
+	const auto allAreMedia = !ranges::any_of(files, [](const auto &f) {
+		using Type = Ui::PreparedFile::Type;
+		return (f.type != Type::Photo) && (f.type != Type::Video);
+	});
+	return allAreVideo || (allAreMedia && compress);
+}
+
 int MaxAlbumItems() {
 	return kMaxAlbumCount;
 }
@@ -205,8 +264,8 @@ int MaxAlbumItems() {
 bool ValidateThumbDimensions(int width, int height) {
 	return (width > 0)
 		&& (height > 0)
-		&& (width < 20 * height)
-		&& (height < 20 * width);
+		&& (width <= 20 * height)
+		&& (height <= 20 * width);
 }
 
 std::vector<PreparedGroup> DivideByGroups(
@@ -266,14 +325,36 @@ QPixmap PrepareSongCoverForThumbnail(QImage image, int size) {
 		size,
 		Qt::KeepAspectRatioByExpanding);
 	using Option = Images::Option;
-	return PixmapFromImage(Images::prepare(
+	const auto ratio = style::DevicePixelRatio();
+	return PixmapFromImage(Images::Prepare(
 		std::move(image),
-		scaledSize.width() * style::DevicePixelRatio(),
-		scaledSize.height() * style::DevicePixelRatio(),
-		Option::Circled | Option::Colored | Option::Smooth,
-		size,
-		size,
-		&st::songCoverOverlayFg));
+		scaledSize * ratio,
+		{
+			.colored = &st::songCoverOverlayFg,
+			.options = Option::RoundCircle,
+			.outer = { size, size },
+		}));
+}
+
+QPixmap BlurredPreviewFromPixmap(QPixmap pixmap, RectParts corners) {
+	const auto image = pixmap.toImage();
+	const auto skip = st::roundRadiusLarge * image.devicePixelRatio();
+	auto small = image.copy(
+		skip,
+		skip,
+		image.width() - 2 * skip,
+		image.height() - 2 * skip
+	).scaled(
+		40,
+		40,
+		Qt::KeepAspectRatioByExpanding,
+		Qt::SmoothTransformation);
+
+	using namespace Images;
+	return PixmapFromImage(Prepare(
+		Blur(std::move(small), true),
+		image.size(),
+		{ .options = RoundOptions(ImageRoundRadius::Large, corners) }));
 }
 
 } // namespace Ui

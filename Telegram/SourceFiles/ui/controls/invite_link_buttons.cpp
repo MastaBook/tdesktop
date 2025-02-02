@@ -12,7 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "lang/lang_keys.h"
-#include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_info.h"
 
 namespace Ui {
@@ -118,6 +118,9 @@ not_null<AbstractButton*> AddJoinedCountButton(
 		result->setAttribute(
 			Qt::WA_TransparentForMouseEvents,
 			!state->content.count);
+		if (!state->content.count) {
+			result->clearState();
+		}
 		const auto &st = st::inviteLinkUserpics;
 		const auto imageWidth = !state->content.userpics.isNull()
 			? state->content.userpics.width() / style::DevicePixelRatio()

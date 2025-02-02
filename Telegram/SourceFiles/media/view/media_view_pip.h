@@ -7,12 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_file_origin.h"
 #include "media/streaming/media_streaming_instance.h"
+#include "media/media_common.h"
 #include "ui/effects/animations.h"
 #include "ui/round_rect.h"
 #include "ui/rp_widget.h"
 
 #include <QtCore/QPointer>
+
+class HistoryItem;
+
+namespace base {
+class PowerSaveBlocker;
+} // namespace base
 
 namespace Data {
 class DocumentMedia;
@@ -28,12 +36,15 @@ struct Capabilities;
 } // namespace GL
 } // namespace Ui
 
-namespace Media {
-namespace Player {
+namespace Media::Player {
 struct TrackState;
-} // namespace Player
+} // namespace Media::Player
 
-namespace View {
+namespace Media::Streaming {
+class Document;
+} // namespace Media::Streaming
+
+namespace Media::View {
 
 class PlaybackProgress;
 
@@ -72,6 +83,8 @@ public:
 	void setDragDisabled(bool disabled);
 	[[nodiscard]] bool dragging() const;
 
+	void handleWaylandResize(QSize size);
+	void handleScreenChanged(not_null<QScreen*> screen);
 	void handleMousePress(QPoint position, Qt::MouseButton button);
 	void handleMouseRelease(QPoint position, Qt::MouseButton button);
 	void handleMouseMove(QPoint position);
@@ -99,6 +112,7 @@ private:
 
 	bool _useTransparency = true;
 	bool _dragDisabled = false;
+	bool _inHandleWaylandResize = false;
 	style::margins _padding;
 
 	RectPart _overState = RectPart();
@@ -127,11 +141,16 @@ public:
 	Pip(
 		not_null<Delegate*> delegate,
 		not_null<DocumentData*> data,
-		FullMsgId contextId,
+		Data::FileOrigin origin,
+		not_null<DocumentData*> chosenQuality,
+		HistoryItem *context,
+		VideoQuality quality,
 		std::shared_ptr<Streaming::Document> shared,
 		FnMut<void()> closeAndContinue,
 		FnMut<void()> destroy);
 	~Pip();
+
+	[[nodiscard]] std::shared_ptr<Streaming::Document> shared() const;
 
 private:
 	enum class OverState {
@@ -187,6 +206,7 @@ private:
 	void saveGeometry();
 
 	void updatePlaybackState();
+	void updatePowerSaveBlocker(const Player::TrackState &state);
 	void updatePlayPauseResumeState(const Player::TrackState &state);
 	void restartAtSeekPosition(crl::time position);
 
@@ -238,20 +258,30 @@ private:
 		QRect outer,
 		float64 shown) const;
 	[[nodiscard]] QRect countRadialRect() const;
+	void applyVideoQuality(VideoQuality value);
+	[[nodiscard]] QImage currentVideoFrameImage() const;
 
 	void seekUpdate(QPoint position);
 	void seekProgress(float64 value);
 	void seekFinish(float64 value);
 
 	const not_null<Delegate*> _delegate;
-	not_null<DocumentData*> _data;
-	FullMsgId _contextId;
-	Streaming::Instance _instance;
+	const not_null<DocumentData*> _data;
+	const Data::FileOrigin _origin;
+	DocumentData *_chosenQuality = nullptr;
+	HistoryItem *_context = nullptr;
+	Media::VideoQuality _quality;
+	std::optional<Streaming::Instance> _instance;
 	bool _opengl = false;
 	PipPanel _panel;
 	QSize _size;
+	std::unique_ptr<base::PowerSaveBlocker> _powerSaveBlocker;
 	std::unique_ptr<PlaybackProgress> _playbackProgress;
 	std::shared_ptr<Data::DocumentMedia> _dataMedia;
+
+	QImage _qualityChangeFrame;
+	bool _qualityChangeFinished = false;
+	crl::time _lastUpdatePosition = 0;
 
 	bool _showPause = false;
 	bool _startPaused = false;
@@ -281,5 +311,4 @@ private:
 
 };
 
-} // namespace View
-} // namespace Media
+} // namespace Media::View
